@@ -110,10 +110,12 @@ func (s *Server) handleFlush(ctx context.Context, r *http.Request) (interface{},
 func (s *Server) handleShutdown(ctx context.Context, r *http.Request) (interface{}, *apiError) {
 	log.Infof("shutting down due to API request")
 
-	if s.OnShutdown != nil {
-		if err := s.OnShutdown(ctx); err != nil {
-			return nil, internalServerError(err)
-		}
+	if f := s.OnShutdown; f != nil {
+		go func() {
+			if err := f(ctx); err != nil {
+				log.Warningf("shutdown failed: %v", err)
+			}
+		}()
 	}
 
 	return &serverapi.Empty{}, nil
