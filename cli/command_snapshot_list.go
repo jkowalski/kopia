@@ -99,6 +99,11 @@ func runSnapshotsCommand(ctx context.Context, rep repo.Repository) error {
 }
 
 func shouldOutputSnapshotSource(rep repo.Repository, src snapshot.SourceInfo) bool {
+	if len(*snapshotListPath) > 0 {
+		// explicit sources provided, always output
+		return true
+	}
+
 	if *snapshotListShowAll {
 		return true
 	}
