@@ -3,14 +3,38 @@ on:
   pull_request:
     branches: [ master ]
   push:
-    branches:
-      - "master"
+    # ci-sandbox is a branch dedicated to testing post-submit code.
+    branches: [ master, ci-sandbox ]
     tags:
-      - "v*"
+      - v*
   schedule:
     - cron:  '0 8,15 * * *'
 jobs:
   build:
+    env:
+      # encrypt various secrets stored as files
+      encrypted_fa1db4b894bb_key: ${{ secrets.ENCRYPTED_FA1DB4B894BB_KEY }}
+      encrypted_fa1db4b894bb_iv: ${{ secrets.ENCRYPTED_FA1DB4B894BB_IV }}
+
+      # Apple ID and app-specific password for notarizaton
+      APPLEID: ${{ secrets.APPLEID }}
+      APPLEIDPASS: ${{ secrets.APPLEIDPASS }}
+      KOPIA_UI_NOTARIZE: yes
+
+      # tool to install Windows signing certificate
+      WINDOWS_SIGNING_TOOLS_URL: ${{ secrets.WINDOWS_SIGNING_TOOLS_URL }}
+      WINDOWS_SIGN_USER: ${{ secrets.WINDOWS_SIGN_USER }}
+      WINDOWS_SIGN_AUTH: ${{ secrets.WINDOWS_SIGN_AUTH }}
+      WINDOWS_CERT_SHA1: ${{ secrets.WINDOWS_CERT_SHA1 }}     
+      WINDOWS_SIGN_TOOL: "C:/Program Files (x86)/Windows Kits/10/bin/10.0.18362.0/x64/signtool.exe"
+
+      # macOS signing certificate (base64-encoded), used by Electron Builder
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+
+      # used to publish releases to GitHub
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
     strategy:
       fail-fast: false
       matrix:
@@ -32,5 +56,9 @@ jobs:
       if: ${{ contains(matrix.os, 'macos') }}
     - name: Check out code into the Go module directory
       uses: actions/checkout@v2
-    - name: Make
-      run: make
+      with:
+        fetch-depth: 0
+    - name: Setup
+      run: make travis-setup
+    - name: Build
+      run: make travis-release
