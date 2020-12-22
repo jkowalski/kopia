@@ -187,7 +187,7 @@ goreleaser: $(goreleaser) print_build_info
 ifeq ($(TRAVIS_PULL_REQUEST),false)
 
 upload-coverage: $(GOVERALLS_TOOL)
-	$(GOVERALLS_TOOL) -service=travis-ci -coverprofile=tmp.cov
+	$(GOVERALLS_TOOL) -service=$(GOVERALLS_SERVICE) -coverprofile=tmp.cov
 
 else
 
