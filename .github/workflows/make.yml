@@ -101,4 +101,6 @@ jobs:
     - name: Setup
       run: make travis-setup
     - name: Build
+      # see https://github.com/gfx/example-github-actions-with-tty
+      shell: 'script -q -e -c "bash {0}"'
       run: make travis-release
