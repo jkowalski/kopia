@@ -146,22 +146,18 @@ func exponentialBackoff(ctx context.Context, desc string, att retry.AttemptFunc)
 }
 
 func isRetriableError(err error) bool {
-	if b2err, ok := err.(*backblaze.B2Error); ok {
-		switch b2err.Status {
-		case http.StatusRequestTimeout:
-			return true
-		case http.StatusTooManyRequests:
-			return true
-		case http.StatusInternalServerError:
-			return true
-		case http.StatusServiceUnavailable:
-			return true
-		case http.StatusGatewayTimeout:
-			return true
-		}
-	}
+	err = translateError(err)
 
-	return false
+	switch err {
+	case nil:
+		return false
+
+	case blob.ErrBlobNotFound:
+		return false
+
+	default:
+		return true
+	}
 }
 
 func (s *b2Storage) PutBlob(ctx context.Context, id blob.ID, data blob.Bytes) error {
