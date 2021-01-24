@@ -22,7 +22,9 @@ type Output interface {
 	BeginDirectory(ctx context.Context, relativePath string, e fs.Directory) error
 	FinishDirectory(ctx context.Context, relativePath string, e fs.Directory) error
 	WriteFile(ctx context.Context, relativePath string, e fs.File) error
+	FileExists(ctx context.Context, relativePath string, e fs.File) bool
 	CreateSymlink(ctx context.Context, relativePath string, e fs.Symlink) error
+	SymlinkExists(ctx context.Context, relativePath string, e fs.Symlink) bool
 	Close(ctx context.Context) error
 }
 
@@ -56,11 +58,18 @@ func (s *Stats) clone() Stats {
 type Options struct {
 	Parallel         int
 	ProgressCallback func(ctx context.Context, s Stats)
+	Incremental      bool
+	IgnoreErrors     bool
 }
 
 // Entry walks a snapshot root with given root entry and restores it to the provided output.
 func Entry(ctx context.Context, rep repo.Repository, output Output, rootEntry fs.Entry, options Options) (Stats, error) {
-	c := copier{output: output, q: parallelwork.NewQueue()}
+	c := copier{
+		output:       output,
+		q:            parallelwork.NewQueue(),
+		incremental:  options.Incremental,
+		ignoreErrors: options.IgnoreErrors,
+	}
 
 	c.q.ProgressCallback = func(ctx context.Context, enqueued, active, completed int64) {
 		options.ProgressCallback(ctx, c.stats.clone())
@@ -91,12 +100,50 @@ func Entry(ctx context.Context, rep repo.Repository, output Output, rootEntry fs
 }
 
 type copier struct {
-	stats  Stats
-	output Output
-	q      *parallelwork.Queue
+	stats        Stats
+	output       Output
+	q            *parallelwork.Queue
+	incremental  bool
+	ignoreErrors bool
 }
 
 func (c *copier) copyEntry(ctx context.Context, e fs.Entry, targetPath string, onCompletion func() error) error {
+	if c.incremental {
+		// in incremental mode, do not copy if the output already exists
+		switch e := e.(type) {
+		case fs.File:
+			if c.output.FileExists(ctx, targetPath, e) {
+				log(ctx).Debugf("skipping file %v because it already exists and is correct", targetPath)
+				atomic.AddInt32(&c.stats.RestoredFileCount, 1)
+				atomic.AddInt64(&c.stats.RestoredTotalFileSize, e.Size())
+
+				return onCompletion()
+			}
+
+		case fs.Symlink:
+			if c.output.SymlinkExists(ctx, targetPath, e) {
+				atomic.AddInt32(&c.stats.RestoredSymlinkCount, 1)
+				log(ctx).Debugf("skipping symlink %v because it already exists and is correct", targetPath)
+
+				return onCompletion()
+			}
+		}
+	}
+
+	err := c.copyEntryInternal(ctx, e, targetPath, onCompletion)
+	if err == nil {
+		return nil
+	}
+
+	if c.ignoreErrors {
+		log(ctx).Warningf("ignored error %v on %v", err, targetPath)
+		return nil
+	}
+
+	return err
+}
+
+func (c *copier) copyEntryInternal(ctx context.Context, e fs.Entry, targetPath string, onCompletion func() error) error {
 	switch e := e.(type) {
 	case fs.Directory:
 		log(ctx).Debugf("dir: '%v'", targetPath)

@@ -63,6 +63,8 @@ var (
 	restoreSkipTimes              = false
 	restoreSkipOwners             = false
 	restoreSkipPermissions        = false
+	restoreIncremental            = false
+	restoreIgnoreErrors           = false
 )
 
 const (
@@ -86,6 +88,8 @@ func addRestoreFlags(cmd *kingpin.CmdClause) {
 	cmd.Flag("skip-permissions", "Skip permissions during restore").BoolVar(&restoreSkipPermissions)
 	cmd.Flag("skip-times", "Skip times during restore").BoolVar(&restoreSkipTimes)
 	cmd.Flag("ignore-permission-errors", "Ignore permission errors").BoolVar(&restoreIgnorePermissionErrors)
+	cmd.Flag("ignore-errors", "Ignore all errors").BoolVar(&restoreIgnoreErrors)
+	cmd.Flag("incremental", "Incremental restore, do not download files that already exist in the destination").BoolVar(&restoreIncremental)
 }
 
 func restoreOutput(ctx context.Context) (restore.Output, error) {
@@ -183,7 +187,9 @@ func runRestoreCommand(ctx context.Context, rep repo.Repository) error {
 	t0 := clock.Now()
 
 	st, err := restore.Entry(ctx, rep, output, rootEntry, restore.Options{
-		Parallel: restoreParallel,
+		Parallel:     restoreParallel,
+		Incremental:  restoreIncremental,
+		IgnoreErrors: restoreIgnoreErrors,
 		ProgressCallback: func(ctx context.Context, stats restore.Stats) {
 			restoredCount := stats.RestoredFileCount + stats.RestoredDirCount + stats.RestoredSymlinkCount
 			enqueuedCount := stats.EnqueuedFileCount + stats.EnqueuedDirCount + stats.EnqueuedSymlinkCount

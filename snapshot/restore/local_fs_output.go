@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/natefinch/atomic"
 	"github.com/pkg/errors"
@@ -16,6 +17,8 @@ import (
 )
 
 const modBits = os.ModePerm | os.ModeSetgid | os.ModeSetuid | os.ModeSticky
+
+const maxTimeDeltaToConsiderFileTheSame = 2 * time.Second
 
 // FilesystemOutput contains the options for outputting a file system tree.
 type FilesystemOutput struct {
@@ -90,6 +93,31 @@ func (o *FilesystemOutput) WriteFile(ctx context.Context, relativePath string, f
 	return nil
 }
 
+// FileExists implements restore.Output interface.
+func (o *FilesystemOutput) FileExists(ctx context.Context, relativePath string, e fs.File) bool {
+	st, err := os.Lstat(filepath.Join(o.TargetPath, relativePath))
+	if err != nil {
+		return false
+	}
+
+	if (st.Mode() & os.ModeType) != 0 {
+		// not a file
+		return false
+	}
+
+	if st.Size() != e.Size() {
+		// wrong size
+		return false
+	}
+
+	timeDelta := st.ModTime().Sub(e.ModTime())
+	if timeDelta < 0 {
+		timeDelta = -timeDelta
+	}
+
+	return timeDelta < maxTimeDeltaToConsiderFileTheSame
+}
+
 // CreateSymlink implements restore.Output interface.
 func (o *FilesystemOutput) CreateSymlink(ctx context.Context, relativePath string, e fs.Symlink) error {
 	targetPath, err := e.Readlink(ctx)
@@ -110,6 +138,16 @@ func (o *FilesystemOutput) CreateSymlink(ctx context.Context, relativePath strin
 	}
 
 	return nil
+}
+
+// SymlinkExists implements restore.Output interface.
+func (o *FilesystemOutput) SymlinkExists(ctx context.Context, relativePath string, e fs.Symlink) bool {
+	st, err := os.Lstat(filepath.Join(o.TargetPath, relativePath))
+	if err != nil {
+		return false
+	}
+
+	return (st.Mode() & os.ModeType) == os.ModeSymlink
 }
 
 // set permission, modification time and user/group ids on targetPath.
