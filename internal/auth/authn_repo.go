@@ -29,6 +29,7 @@ func (ac *repositoryUserAuthenticator) authenticate(ctx context.Context, rep rep
 	// if the server switched to serving another repository, discard cache.
 	if rep != ac.lastRep {
 		ac.userProfiles = nil
+		ac.lastRep = rep
 	}
 
 	// see if we're due for a refresh and refresh userProfiles map
