@@ -1,0 +1,21 @@
+name: FreeBSD
+on: [push,pull_request]
+jobs:
+  endurance-test:
+    name: Tests
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Test in FreeBSD
+      id: test
+      uses: vmactions/freebsd-vm@v0.1.2
+      with:
+        usesh: true
+        mem: 2048
+        run: |
+          pwd
+          ls -lah
+          whoami
+          env
+          freebsd-version
+          make
