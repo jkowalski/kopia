@@ -38,7 +38,7 @@ require (
 	github.com/montanaflynn/stats v0.6.5 // indirect
 	github.com/natefinch/atomic v0.0.0-20200526193002-18c0533a5b09
 	github.com/op/go-logging v0.0.0-20160315200505-970db520ece7
-	github.com/pierrec/lz4 v2.6.0+incompatible // indirect
+	github.com/pierrec/lz4 v2.6.0+incompatible
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/profile v1.6.0
 	github.com/pkg/sftp v1.13.0
@@ -65,7 +65,7 @@ require (
 	golang.org/x/sys v0.0.0-20210503080704-8803ae5d1324
 	golang.org/x/term v0.0.0-20210317153231-de623e64d2a6
 	google.golang.org/api v0.46.0
-	google.golang.org/grpc v1.37.0
+	google.golang.org/grpc v1.37.1
 	google.golang.org/protobuf v1.26.0
 	gopkg.in/ini.v1 v1.62.0 // indirect
 	gopkg.in/kothar/go-backblaze.v0 v0.0.0-20210124194846-35409b867216
