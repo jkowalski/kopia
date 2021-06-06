@@ -5,18 +5,18 @@ go 1.16
 require (
 	cloud.google.com/go/storage v1.15.0
 	contrib.go.opencensus.io/exporter/prometheus v0.3.0
-	github.com/Azure/azure-pipeline-go v0.2.3 // indirect
+	github.com/Azure/azure-pipeline-go v0.2.3
 	github.com/Azure/azure-storage-blob-go v0.13.0
 	github.com/GehirnInc/crypt v0.0.0-20200316065508-bb7000b8a962 // indirect
 	github.com/StackExchange/wmi v0.0.0-20210224194228-fe8f1750fd46 // indirect
 	github.com/alecthomas/kingpin v0.0.0-20200323085623-b6657d9477a6 // this is pulling master, which is newer than v2
 	github.com/alecthomas/units v0.0.0-20210208195552-ff826a37aa15
-	github.com/aws/aws-sdk-go v1.38.41
+	github.com/aws/aws-sdk-go v1.38.55
 	github.com/chmduquesne/rollinghash v4.0.0+incompatible
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
 	github.com/dustinkirkland/golang-petname v0.0.0-20191129215211-8e5a1ed0cff0
 	github.com/efarrer/iothrottler v0.0.1
-	github.com/fatih/color v1.11.0
+	github.com/fatih/color v1.12.0
 	github.com/foomo/htpasswd v0.0.0-20200116085101-e3a90e78da9c
 	github.com/go-ole/go-ole v1.2.5 // indirect
 	github.com/gofrs/flock v0.8.0
