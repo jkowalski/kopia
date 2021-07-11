@@ -14,7 +14,7 @@ require (
 	github.com/chmduquesne/rollinghash v4.0.0+incompatible
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
 	github.com/dustinkirkland/golang-petname v0.0.0-20191129215211-8e5a1ed0cff0
-	github.com/efarrer/iothrottler v0.0.1
+	github.com/efarrer/iothrottler v0.0.2
 	github.com/fatih/color v1.12.0
 	github.com/foomo/htpasswd v0.0.0-20200116085101-e3a90e78da9c
 	github.com/frankban/quicktest v1.10.2 // indirect
