@@ -8,7 +8,7 @@ import (
 
 // CreateStorageFunc is a function that returns Storage with provided options, optionally
 // creating the underlying storage location (e.g. directory), when possible.
-type CreateStorageFunc func(ctx context.Context, options interface{}, isCreate bool) (Storage, error)
+type CreateStorageFunc[TOpt any] func(ctx context.Context, options TOpt, isCreate bool) (Storage, error)
 
 // nolint:gochecknoglobals
 var factories = map[string]*storageFactory{}
@@ -16,18 +16,21 @@ var factories = map[string]*storageFactory{}
 // StorageFactory allows creation of repositories in a generic way.
 type storageFactory struct {
 	defaultConfigFunc func() interface{}
-	createStorageFunc CreateStorageFunc
+	createStorageFunc CreateStorageFunc[interface{}]
 }
 
 // AddSupportedStorage registers factory function to create storage with a given type name.
-func AddSupportedStorage(
+func AddSupportedStorage[TOpt any,PTOpt *TOpt](
 	urlScheme string,
-	defaultConfigFunc func() interface{},
-	createStorageFunc CreateStorageFunc,
+	createStorageFunc CreateStorageFunc[PTOpt],
 ) {
 	f := &storageFactory{
-		defaultConfigFunc: defaultConfigFunc,
-		createStorageFunc: createStorageFunc,
+		defaultConfigFunc: func() interface{} {
+			return new(TOpt)
+		},
+		createStorageFunc: func(ctx context.Context, options interface{}, isCreate bool) (Storage, error) {
+			return createStorageFunc(ctx, options.(PTOpt), isCreate)
+		},
 	}
 
 	factories[urlScheme] = f
@@ -42,3 +45,4 @@ func NewStorage(ctx context.Context, cfg ConnectionInfo, isCreate bool) (Storage
 
 	return nil, errors.Errorf("unknown storage type: %s", cfg.Type)
 }
+

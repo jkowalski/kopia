@@ -22,7 +22,7 @@ var (
 const retryExponent = 1.5
 
 // AttemptFunc performs an attempt and returns a value (optional, may be nil) and an error.
-type AttemptFunc func() (interface{}, error)
+type AttemptFunc[T any] func() (T, error)
 
 // IsRetriableFunc is a function that determines whether an error is retriable.
 type IsRetriableFunc func(err error) bool
@@ -30,12 +30,12 @@ type IsRetriableFunc func(err error) bool
 // WithExponentialBackoff runs the provided attempt until it succeeds, retrying on all errors that are
 // deemed retriable by the provided function. The delay between retries grows exponentially up to
 // a certain limit.
-func WithExponentialBackoff(ctx context.Context, desc string, attempt AttemptFunc, isRetriableError IsRetriableFunc) (interface{}, error) {
+func WithExponentialBackoff[T any](ctx context.Context, desc string, attempt AttemptFunc[T], isRetriableError IsRetriableFunc) (T, error) {
 	return internalRetry(ctx, desc, attempt, isRetriableError, retryInitialSleepAmount, retryMaxSleepAmount, maxAttempts, retryExponent)
 }
 
 // Periodically runs the provided attempt until it succeeds, waiting given fixed amount between attempts.
-func Periodically(ctx context.Context, interval time.Duration, count int, desc string, attempt AttemptFunc, isRetriableError IsRetriableFunc) (interface{}, error) {
+func Periodically[T any](ctx context.Context, interval time.Duration, count int, desc string, attempt AttemptFunc[T], isRetriableError IsRetriableFunc) (T, error) {
 	return internalRetry(ctx, desc, attempt, isRetriableError, interval, interval, count, 1)
 }
 
@@ -51,15 +51,16 @@ func PeriodicallyNoValue(ctx context.Context, interval time.Duration, count int,
 // internalRetry runs the provided attempt until it succeeds, retrying on all errors that are
 // deemed retriable by the provided function. The delay between retries grows exponentially up to
 // a certain limit.
-func internalRetry(ctx context.Context, desc string, attempt AttemptFunc, isRetriableError IsRetriableFunc, initial, max time.Duration, count int, factor float64) (interface{}, error) {
+func internalRetry[T any](ctx context.Context, desc string, attempt AttemptFunc[T], isRetriableError IsRetriableFunc, initial, max time.Duration, count int, factor float64) (T, error) {
 	sleepAmount := initial
 
 	var lastError error
+	var defaultT T
 
 	for i := 0; i < count; i++ {
 		if cerr := ctx.Err(); cerr != nil {
 			// nolint:wrapcheck
-			return nil, cerr
+			return defaultT, cerr
 		}
 
 		v, err := attempt()
@@ -82,7 +83,7 @@ func internalRetry(ctx context.Context, desc string, attempt AttemptFunc, isRetr
 		}
 	}
 
-	return nil, errors.Errorf("unable to complete %v despite %v retries, last error: %v", desc, count, lastError)
+	return defaultT, errors.Errorf("unable to complete %v despite %v retries, last error: %v", desc, count, lastError)
 }
 
 // WithExponentialBackoffNoValue is a shorthand for WithExponentialBackoff except the

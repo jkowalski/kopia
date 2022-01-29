@@ -57,13 +57,7 @@ func (s reconnectableStorage) ConnectionInfo() blob.ConnectionInfo {
 func init() {
 	blob.AddSupportedStorage(
 		reconnectableStorageType,
-		func() interface{} { return &reconnectableStorageOptions{} },
-		func(ctx context.Context, o interface{}, isCreate bool) (blob.Storage, error) {
-			opt, ok := o.(*reconnectableStorageOptions)
-			if !ok {
-				return nil, errors.Errorf("invalid options %T", o)
-			}
-
+		func(ctx context.Context, opt *reconnectableStorageOptions, isCreate bool) (blob.Storage, error) {
 			if opt.UUID == "" {
 				return nil, errors.Errorf("missing UUID")
 			}

@@ -308,10 +308,7 @@ func New(ctx context.Context, opt *Options) (blob.Storage, error) {
 func init() {
 	blob.AddSupportedStorage(
 		azStorageType,
-		func() interface{} {
-			return &Options{}
-		},
-		func(ctx context.Context, o interface{}, isCreate bool) (blob.Storage, error) {
-			return New(ctx, o.(*Options)) // nolint:forcetypeassert
+		func(ctx context.Context, o *Options, isCreate bool) (blob.Storage, error) {
+			return New(ctx, o) // nolint:forcetypeassert
 		})
 }
