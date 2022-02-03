@@ -20,12 +20,12 @@ require (
 	github.com/golang-jwt/jwt/v4 v4.2.0
 	github.com/golang/protobuf v1.5.2
 	github.com/google/fswalker v0.2.1-0.20200214223026-f0e929ba4126
-	github.com/google/go-cmp v0.5.6
+	github.com/google/go-cmp v0.5.7
 	github.com/google/readahead v0.0.0-20161222183148-eaceba169032 // indirect
 	github.com/google/uuid v1.3.0
 	github.com/gorilla/mux v1.8.0
 	github.com/hanwen/go-fuse/v2 v2.1.1-0.20220112183258-f57e95bda82d
-	github.com/klauspost/compress v1.13.6
+	github.com/klauspost/compress v1.14.2
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
 	github.com/klauspost/pgzip v1.2.5
 	github.com/kylelemons/godebug v1.1.0
@@ -40,14 +40,14 @@ require (
 	github.com/pkg/sftp v1.13.4
 	github.com/pquerna/ffjson v0.0.0-20190930134022-aa0246cd15f7 // indirect
 	github.com/prometheus/client_golang v1.11.0
-	github.com/sanity-io/litter v1.5.1
+	github.com/sanity-io/litter v1.5.2
 	github.com/sirupsen/logrus v1.8.1 // indirect
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966
 	github.com/stretchr/testify v1.7.0
 	github.com/studio-b12/gowebdav v0.0.0-20211106090535-29e74efa701f
 	github.com/tg123/go-htpasswd v1.2.0
 	github.com/zalando/go-keyring v0.1.1
-	github.com/zeebo/blake3 v0.2.1
+	github.com/zeebo/blake3 v0.2.2
 	go.opencensus.io v0.23.0
 	go.uber.org/zap v1.20.0
 	golang.org/x/crypto v0.0.0-20210921155107-089bfa567519
@@ -60,7 +60,7 @@ require (
 	golang.org/x/term v0.0.0-20210927222741-03fcf44c2211
 	golang.org/x/text v0.3.7
 	google.golang.org/api v0.66.0
-	google.golang.org/grpc v1.43.0
+	google.golang.org/grpc v1.44.0
 	google.golang.org/protobuf v1.27.1
 	gopkg.in/ini.v1 v1.63.2 // indirect
 	gopkg.in/kothar/go-backblaze.v0 v0.0.0-20210124194846-35409b867216
