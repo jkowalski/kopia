@@ -1,7 +1,29 @@
 version: 2
 updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    open-pull-requests-limit: 5
+    schedule:
+      interval: weekly
+    groups:
+    # create larges PR upgrading multiple dependencies in one shot,
+    # only include upstream dependencies that are are stable, have somewhat
+    # regular releases that would be otherwise hard to manually manage.
+    - cloud-providers:
+      patterns:
+      - "cloud.google.com/*"
+      - "github.com/aws/aws-sdk-go/*"
+      - "github.com/minio/minio-go/*"
+      - "golang.org/x/*"
+      - "google.golang.org/*"
+      - "github.com/prometheus/*"
+      - "go.opentelemetry.io/*"
   - package-ecosystem: github-actions
     directory: "/"
     open-pull-requests-limit: 3
     schedule:
       interval: weekly
+  - package-ecosystem: npm
+    directory: "/app"
+    schedule:
+      interval: monthly
