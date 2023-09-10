@@ -33,6 +33,26 @@ func askForNewRepositoryPassword(out io.Writer) (string, error) {
 	}
 }
 
+func askForServicePassword(out io.Writer) (string, error) {
+	for {
+		p1, err := askPass(out, "Enter current user password: ")
+		if err != nil {
+			return "", errors.Wrap(err, "password entry")
+		}
+
+		p2, err := askPass(out, "Re-enter password for verification: ")
+		if err != nil {
+			return "", errors.Wrap(err, "password verification")
+		}
+
+		if p1 != p2 {
+			fmt.Fprintln(out, "Passwords don't match!")
+		} else {
+			return p1, nil
+		}
+	}
+}
+
 func askForChangedRepositoryPassword(out io.Writer) (string, error) {
 	for {
 		p1, err := askPass(out, "Enter new password: ")

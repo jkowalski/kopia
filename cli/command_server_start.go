@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alecthomas/kingpin/v2"
 	"github.com/gorilla/mux"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -27,6 +28,13 @@ import (
 const serverRandomPasswordLength = 32
 
 type commandServerStart struct {
+	commonServerStartInstallFlags
+
+	svc advancedAppServices
+	out textOutput
+}
+
+type commonServerStartInstallFlags struct {
 	co connectOptions
 
 	serverStartHTMLPath string
@@ -70,13 +78,10 @@ type commandServerStart struct {
 
 	disableCSRFTokenChecks bool // disable CSRF token checks - used for development/debugging only
 
-	sf  serverFlags
-	svc advancedAppServices
-	out textOutput
+	sf serverFlags
 }
 
-func (c *commandServerStart) setup(svc advancedAppServices, parent commandParent) {
-	cmd := parent.Command("start", "Start Kopia server")
+func (c *commonServerStartInstallFlags) setup(svc advancedAppServices, cmd *kingpin.CmdClause) {
 	cmd.Flag("html", "Server the provided HTML at the root URL").ExistingDirVar(&c.serverStartHTMLPath)
 	cmd.Flag("ui", "Start the server with HTML UI").Default("true").BoolVar(&c.serverStartUI)
 
@@ -120,6 +125,12 @@ func (c *commandServerStart) setup(svc advancedAppServices, parent commandParent
 
 	c.sf.setup(svc, cmd)
 	c.co.setup(svc, cmd)
+}
+
+func (c *commandServerStart) setup(svc advancedAppServices, parent commandParent) {
+	cmd := parent.Command("start", "Start Kopia server")
+
+	c.commonServerStartInstallFlags.setup(svc, cmd)
 	c.svc = svc
 	c.out.setup(svc)
 

@@ -20,6 +20,9 @@ type commandServer struct {
 	throttle commandServerThrottle
 	upload   commandServerUpload
 	shutdown commandServerShutdown
+
+	installService   commandServerInstallService
+	uninstallService commandServerUninstallService
 }
 
 type serverFlags struct {
@@ -72,6 +75,9 @@ func (c *commandServer) setup(svc advancedAppServices, parent commandParent) {
 	c.pause.setup(svc, cmd)
 	c.resume.setup(svc, cmd)
 	c.throttle.setup(svc, cmd)
+
+	c.installService.setup(svc, cmd)
+	c.uninstallService.setup(svc, cmd)
 }
 
 func (c *serverClientFlags) serverAPIClientOptions() (apiclient.Options, error) {
