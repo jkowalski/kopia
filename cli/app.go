@@ -144,24 +144,25 @@ type App struct {
 	onFatalErrorCallbacks []func(err error)
 
 	// subcommands
-	blob        commandBlob
-	benchmark   commandBenchmark
-	cache       commandCache
-	content     commandContent
-	diff        commandDiff
-	index       commandIndex
-	list        commandList
-	server      commandServer
-	session     commandSession
-	policy      commandPolicy
-	restore     commandRestore
-	show        commandShow
-	snapshot    commandSnapshot
-	manifest    commandManifest
-	mount       commandMount
-	maintenance commandMaintenance
-	repository  commandRepository
-	logs        commandLogs
+	blob         commandBlob
+	benchmark    commandBenchmark
+	cache        commandCache
+	content      commandContent
+	diff         commandDiff
+	index        commandIndex
+	list         commandList
+	server       commandServer
+	session      commandSession
+	policy       commandPolicy
+	restore      commandRestore
+	show         commandShow
+	snapshot     commandSnapshot
+	manifest     commandManifest
+	mount        commandMount
+	maintenance  commandMaintenance
+	repository   commandRepository
+	logs         commandLogs
+	notification commandNotification
 
 	// testability hooks
 	testonlyIgnoreMissingRequiredFeatures bool
@@ -305,6 +306,7 @@ func (c *App) setup(app *kingpin.Application) {
 	c.index.setup(c, app)
 	c.list.setup(c, app)
 	c.logs.setup(c, app)
+	c.notification.setup(c, app)
 	c.server.setup(c, app)
 	c.session.setup(c, app)
 	c.restore.setup(c, app)
