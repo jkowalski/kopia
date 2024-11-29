@@ -24,10 +24,10 @@ tasks:
     generates:
       - node_modules/*
     preconditions:
-      - sh: "${npm_bin} version"
+      - sh: "{{.npm_bin}} version"
         msg: "Looks like npm isn't installed. Npm is part of the Node installer: https://nodejs.org/en/download/"
     cmds:
-      - "${npm_bin} install"
+      - "{{.npm_bin}} install"
 
   build:frontend:
     summary: Build the frontend project
@@ -40,7 +40,7 @@ tasks:
       - task: install:frontend:deps
       - task: generate:bindings
     cmds:
-      - "${npm_bin} run build -q"
+      - "{{.npm_bin}} run build -q"
 
   generate:bindings:
     summary: Generates bindings for the frontend
@@ -70,7 +70,7 @@ tasks:
     deps:
       - task: install:frontend:deps
     cmds:
-      - "${npm_bin} run dev -- --port {{.VITE_PORT}} --strictPort"
+      - "{{.npm_bin}} run dev -- --port {{.VITE_PORT}} --strictPort"
 
   update:build-assets:
     summary: Updates the build assets
