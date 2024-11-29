@@ -1,5 +1,9 @@
 version: '3'
 
+vars:
+  wails3_bin: '{{.WAILS3_BIN | default "path-to-wails3"}}'
+  npm_bin: '{{.NPM_BIN | default "path-to-npm"}}'
+
 tasks:
   go:mod:tidy:
     summary: Runs `go mod tidy`
@@ -20,10 +24,10 @@ tasks:
     generates:
       - node_modules/*
     preconditions:
-      - sh: npm version
+      - sh: "${npm_bin} version"
         msg: "Looks like npm isn't installed. Npm is part of the Node installer: https://nodejs.org/en/download/"
     cmds:
-      - npm install
+      - "${npm_bin} install"
 
   build:frontend:
     summary: Build the frontend project
@@ -36,7 +40,7 @@ tasks:
       - task: install:frontend:deps
       - task: generate:bindings
     cmds:
-      - npm run build -q
+      - "${npm_bin} run build -q"
 
   generate:bindings:
     summary: Generates bindings for the frontend
@@ -47,7 +51,7 @@ tasks:
     generates:
       - "frontend/bindings/**/*"
     cmds:
-      - wails3 generate bindings -f '{{.BUILD_FLAGS}}'{{if .UseTypescript}} -ts{{end}}
+      - "{{.wails3_bin}} generate bindings -f '{{.BUILD_FLAGS}}'{{if .UseTypescript}} -ts{{end}}"
 
   generate:icons:
     summary: Generates Windows `.ico` and Mac `.icns` files from an image
@@ -58,7 +62,7 @@ tasks:
       - "icons.icns"
       - "icons.ico"
     cmds:
-      - wails3 generate icons -input appicon.png
+      - "{{.wails3_bin}} generate icons -input appicon.png"
 
   dev:frontend:
     summary: Runs the frontend in development mode
@@ -66,10 +70,10 @@ tasks:
     deps:
       - task: install:frontend:deps
     cmds:
-      - npm run dev -- --port {{.VITE_PORT}} --strictPort
+      - "${npm_bin} run dev -- --port {{.VITE_PORT}} --strictPort"
 
   update:build-assets:
     summary: Updates the build assets
     dir: build
     cmds:
-      - wails3 update build-assets -name "{{.APP_NAME}}" -binaryname "{{.APP_NAME}}" -config config.yml -dir .
+      - '{{.wails3_bin}} update build-assets -name "{{.APP_NAME}}" -binaryname "{{.APP_NAME}}" -config config.yml -dir .'

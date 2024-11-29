@@ -110,6 +110,7 @@ GOTESTSUM_VERSION=1.11.0
 GORELEASER_VERSION=v0.176.0
 RCLONE_VERSION=1.68.2
 GITCHGLOG_VERSION=0.15.1
+WAILS3_VERSION=v3.0.0-alpha.7
 
 # nodejs / npm
 node_base_dir=$(TOOLS_DIR)$(slash)node-$(NODE_VERSION)
@@ -163,6 +164,14 @@ $(checklocks): export GOPATH=$(checklocks_dir)
 $(checklocks):
 	go install gvisor.dev/gvisor/tools/checklocks/cmd/checklocks@$(CHECKLOCKS_VERSION)
 	go clean -modcache
+
+# wails3
+wails3_dir=$(TOOLS_DIR)$(slash)wails3-$(WAILS3_VERSION)
+wails3=$(wails3_dir)$(slash)bin$(slash)wails3$(exe_suffix)
+
+$(wails3): export GOPATH=$(wails3_dir)
+$(wails3):
+	go install github.com/wailsapp/wails/v3/cmd/wails3@$(WAILS3_VERSION)
 
 # cli2md
 cli2mdbin=$(TOOLS_DIR)$(slash)cli2md-current$(exe_suffix)

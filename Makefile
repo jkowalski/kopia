@@ -116,6 +116,12 @@ website:
 kopia-ui: $(kopia_ui_embedded_exe)
 	$(MAKE) -C app build-electron
 
+kopia-ui-ng: export WAILS3_BIN=$(wails3)
+kopia-ui-ng: export NPM_BIN=$(npm)
+kopia-ui-ng: $(wails3) $(npm)
+	task -d KopiaUI build build
+	
+
 MAYBE_XVFB=
 ifeq ($(GOOS),linux)
 # on Linux
