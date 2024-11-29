@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "0.1.0"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "0.1.0",
+			"CompanyName": "Kopia Project",
+			"FileDescription": "Fast And Secure Open Source Backup",
+			"LegalCopyright": "(c) Kopia Project",
+			"ProductName": "Kopia UI",
+			"Comments": "This is a comment"
+		}
+	}
+}
