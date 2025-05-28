@@ -2,19 +2,19 @@ package cache
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/pkg/errors"
 
+	"github.com/kopia/kopia/internal/gather"
 	"github.com/kopia/kopia/repo/blob"
+	"github.com/kopia/kopia/repo/content/index"
 )
 
 const (
@@ -119,40 +119,59 @@ func (ps *PackedStorage) loadIndex(ctx context.Context) error {
 	}
 	defer f.Close()
 
-	var entries []indexEntry
-	dec := json.NewDecoder(f)
-	if err := dec.Decode(&entries); err != nil {
-		return errors.Wrap(err, "error decoding index")
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return errors.Wrap(err, "error reading index file")
 	}
 
-	for _, e := range entries {
-		ps.index[e.blobID] = packEntry{
-			packID:   e.packID,
-			offset:   e.offset,
-			length:   e.length,
-			modified: e.timestamp,
+	ndx, err := index.Open(data, nil, func() int { return 0 })
+	if err != nil {
+		return errors.Wrap(err, "error opening index")
+	}
+	defer ndx.Close()
+
+	err = ndx.Iterate(index.AllIDs, func(i index.Info) error {
+		ps.index[blob.ID(i.ContentID.String())] = packEntry{
+			packID:   blob.ID(i.PackBlobID),
+			offset:   int64(i.PackOffset),
+			length:   int64(i.PackedLength),
+			modified: time.Unix(i.TimestampSeconds, 0),
 		}
-	}
+		return nil
+	})
 
-	return nil
+	return errors.Wrap(err, "error iterating index")
 }
 
 func (ps *PackedStorage) saveIndex(ctx context.Context) error {
-	var entries []indexEntry
+	var infos []*index.Info
 
 	for blobID, entry := range ps.index {
-		entries = append(entries, indexEntry{
-			blobID:    blobID,
-			packID:    entry.packID,
-			offset:    entry.offset,
-			length:    entry.length,
-			timestamp: entry.modified,
+		contentID, err := index.ParseID(string(blobID))
+		if err != nil {
+			return errors.Wrapf(err, "error parsing content ID: %v", blobID)
+		}
+
+		infos = append(infos, &index.Info{
+			ContentID:        contentID,
+			PackBlobID:       entry.packID,
+			PackOffset:       uint32(entry.offset),
+			PackedLength:     uint32(entry.length),
+			TimestampSeconds: entry.modified.Unix(),
 		})
 	}
 
-	sort.Slice(entries, func(i, j int) bool {
-		return string(entries[i].blobID) < string(entries[j].blobID)
-	})
+	b := index.Builder{}
+	for _, i := range infos {
+		b.Add(*i)
+	}
+
+	var buf gather.WriteBuffer
+	defer buf.Close()
+
+	if err := b.Build(&buf, index.Version2); err != nil {
+		return errors.Wrap(err, "error building index")
+	}
 
 	f, err := os.Create(filepath.Join(ps.directory, indexFileName+".tmp"))
 	if err != nil {
@@ -160,9 +179,8 @@ func (ps *PackedStorage) saveIndex(ctx context.Context) error {
 	}
 	defer f.Close()
 
-	enc := json.NewEncoder(f)
-	if err := enc.Encode(entries); err != nil {
-		return errors.Wrap(err, "error encoding index")
+	if _, err := buf.Bytes().WriteTo(f); err != nil {
+		return errors.Wrap(err, "error writing index")
 	}
 
 	if err := f.Close(); err != nil {
