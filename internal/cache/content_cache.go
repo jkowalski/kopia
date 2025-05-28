@@ -30,6 +30,7 @@ type Options struct {
 	FetchFullBlobs     bool
 	Sweep              SweepSettings
 	TimeNow            func() time.Time
+	UsePacked          bool
 }
 
 type contentCacheImpl struct {
@@ -173,18 +174,28 @@ func (c *contentCacheImpl) CacheStorage() Storage {
 
 // NewContentCache creates new content cache for data contents.
 func NewContentCache(ctx context.Context, st blob.Storage, opt Options, mr *metrics.Registry) (ContentCache, error) {
-	cacheStorage := opt.Storage
-	if cacheStorage == nil {
-		if opt.BaseCacheDirectory == "" {
-			return passthroughContentCache{st}, nil
+	if opt.BaseCacheDirectory == "" {
+		return passthroughContentCache{st}, nil
+	}
+
+	var err error
+	var cacheStorage Storage
+
+	if opt.Storage != nil {
+		cacheStorage = opt.Storage
+	} else {
+		if opt.UsePacked {
+			cacheStorage, err = NewPackedStorage(ctx, opt.BaseCacheDirectory)
+		} else {
+			cacheStorage, err = NewStorageOrNil(ctx, opt.BaseCacheDirectory, opt.Sweep.MaxSizeBytes, opt.CacheSubDir)
 		}
-
-		var err error
-
-		cacheStorage, err = NewStorageOrNil(ctx, opt.BaseCacheDirectory, opt.Sweep.MaxSizeBytes, opt.CacheSubDir)
 		if err != nil {
 			return nil, errors.Wrap(err, "error initializing cache storage")
 		}
+	}
+
+	if cacheStorage == nil {
+		return passthroughContentCache{st}, nil
 	}
 
 	pc, err := NewPersistentCache(ctx, opt.CacheSubDir, cacheStorage, cacheprot.ChecksumProtection(opt.HMACSecret), opt.Sweep, mr, opt.TimeNow)
