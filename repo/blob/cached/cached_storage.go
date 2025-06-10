@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pkg/errors"
+
 	"github.com/kopia/kopia/internal/clock"
 	"github.com/kopia/kopia/internal/gather"
 	"github.com/kopia/kopia/repo/blob"
@@ -45,18 +47,18 @@ type cachedItem struct {
 	timestamp time.Time
 }
 
-// GetCapacity passes through to the base storage
+// GetCapacity passes through to the base storage.
 func (s *cachedStorage) GetCapacity(ctx context.Context) (blob.Capacity, error) {
 	//nolint:wrapcheck
 	return s.base.GetCapacity(ctx)
 }
 
-// IsReadOnly passes through to the base storage
+// IsReadOnly passes through to the base storage.
 func (s *cachedStorage) IsReadOnly() bool {
 	return s.base.IsReadOnly()
 }
 
-// GetBlob checks the cache first, then falls back to the base storage
+// GetBlob checks the cache first, then falls back to the base storage.
 func (s *cachedStorage) GetBlob(ctx context.Context, id blob.ID, offset, length int64, output blob.OutputBuffer) error {
 	// Check cache first
 	s.mu.RLock()
@@ -64,30 +66,7 @@ func (s *cachedStorage) GetBlob(ctx context.Context, id blob.ID, offset, length 
 	s.mu.RUnlock()
 
 	if found {
-		// Serve from cache
-		output.Reset()
-
-		data := item.data
-		if offset < 0 {
-			return blob.ErrInvalidRange
-		}
-
-		if offset >= int64(len(data)) {
-			return blob.ErrInvalidRange
-		}
-
-		if length < 0 {
-			// Return all data from offset
-			_, err := output.Write(data[offset:])
-			return err
-		}
-
-		if offset+length > int64(len(data)) {
-			return blob.ErrInvalidRange
-		}
-
-		_, err := output.Write(data[offset : offset+length])
-		return err
+		return s.serveBlobFromCache(item.data, offset, length, output)
 	}
 
 	// Fall back to base storage
@@ -95,7 +74,35 @@ func (s *cachedStorage) GetBlob(ctx context.Context, id blob.ID, offset, length 
 	return s.base.GetBlob(ctx, id, offset, length, output)
 }
 
-// GetMetadata checks the cache first, then falls back to the base storage
+// serveBlobFromCache serves blob data from the cache with proper range handling.
+func (s *cachedStorage) serveBlobFromCache(data []byte, offset, length int64, output blob.OutputBuffer) error {
+	output.Reset()
+
+	if offset < 0 || offset >= int64(len(data)) {
+		return blob.ErrInvalidRange
+	}
+
+	if length < 0 {
+		// Return all data from offset
+		if _, err := output.Write(data[offset:]); err != nil {
+			return errors.Wrap(err, "error writing data to output")
+		}
+
+		return nil
+	}
+
+	if offset+length > int64(len(data)) {
+		return blob.ErrInvalidRange
+	}
+
+	if _, err := output.Write(data[offset : offset+length]); err != nil {
+		return errors.Wrap(err, "error writing data to output")
+	}
+
+	return nil
+}
+
+// GetMetadata checks the cache first, then falls back to the base storage.
 func (s *cachedStorage) GetMetadata(ctx context.Context, id blob.ID) (blob.Metadata, error) {
 	// Check cache first
 	s.mu.RLock()
@@ -111,7 +118,7 @@ func (s *cachedStorage) GetMetadata(ctx context.Context, id blob.ID) (blob.Metad
 	return s.base.GetMetadata(ctx, id)
 }
 
-// PutBlob handles blob writes based on the configured action function
+// PutBlob handles blob writes based on the configured action function.
 func (s *cachedStorage) PutBlob(ctx context.Context, id blob.ID, data blob.Bytes, opts blob.PutOptions) error {
 	action := s.actionFunc(id)
 
@@ -125,9 +132,8 @@ func (s *cachedStorage) PutBlob(ctx context.Context, id blob.ID, data blob.Bytes
 		var tmp gather.WriteBuffer
 		defer tmp.Close()
 
-		_, err := data.WriteTo(&tmp)
-		if err != nil {
-			return err
+		if _, err := data.WriteTo(&tmp); err != nil {
+			return errors.Wrap(err, "error converting blob data")
 		}
 
 		dataBytes := tmp.ToByteSlice()
@@ -161,7 +167,7 @@ func (s *cachedStorage) PutBlob(ctx context.Context, id blob.ID, data blob.Bytes
 	}
 }
 
-// DeleteBlob removes from cache and deletes from base storage
+// DeleteBlob removes from cache and deletes from base storage.
 func (s *cachedStorage) DeleteBlob(ctx context.Context, id blob.ID) error {
 	// Remove from cache
 	s.mu.Lock()
@@ -173,14 +179,16 @@ func (s *cachedStorage) DeleteBlob(ctx context.Context, id blob.ID) error {
 	return s.base.DeleteBlob(ctx, id)
 }
 
-// ListBlobs lists from both cache and base storage, merging results
+// ListBlobs lists from both cache and base storage, merging results.
 func (s *cachedStorage) ListBlobs(ctx context.Context, prefix blob.ID, callback func(blob.Metadata) error) error {
 	// Track which blobs we've seen to avoid duplicates
 	seen := make(map[blob.ID]bool)
 
 	// First, list cached blobs that match the prefix
 	s.mu.RLock()
+
 	var cachedItems []cachedItem
+
 	prefixStr := string(prefix)
 	for id, item := range s.cache {
 		if strings.HasPrefix(string(id), prefixStr) {
@@ -198,15 +206,16 @@ func (s *cachedStorage) ListBlobs(ctx context.Context, prefix blob.ID, callback 
 	}
 
 	// Then list from base storage, skipping items we've already seen
-	return s.base.ListBlobs(ctx, prefix, func(metadata blob.Metadata) error {
+	return errors.Wrap(s.base.ListBlobs(ctx, prefix, func(metadata blob.Metadata) error {
 		if seen[metadata.BlobID] {
 			return nil // Skip, already processed from cache
 		}
+
 		return callback(metadata)
-	})
+	}), "error listing blobs from base storage")
 }
 
-// Close closes the base storage and clears the cache
+// Close closes the base storage and clears the cache.
 func (s *cachedStorage) Close(ctx context.Context) error {
 	s.mu.Lock()
 	s.cache = make(map[blob.ID]cachedItem)
@@ -216,17 +225,17 @@ func (s *cachedStorage) Close(ctx context.Context) error {
 	return s.base.Close(ctx)
 }
 
-// ConnectionInfo returns the base storage's connection info
+// ConnectionInfo returns the base storage's connection info.
 func (s *cachedStorage) ConnectionInfo() blob.ConnectionInfo {
 	return s.base.ConnectionInfo()
 }
 
-// DisplayName returns a modified display name indicating caching
+// DisplayName returns a modified display name indicating caching.
 func (s *cachedStorage) DisplayName() string {
 	return "Cached: " + s.base.DisplayName()
 }
 
-// FlushCaches flushes the base storage caches and optionally clears our memory cache
+// FlushCaches flushes the base storage caches and optionally clears our memory cache.
 func (s *cachedStorage) FlushCaches(ctx context.Context) error {
 	//nolint:wrapcheck
 	return s.base.FlushCaches(ctx)
@@ -286,14 +295,14 @@ func IgnorePrefixesActionFunc(ignorePrefixes []string) BlobActionFunc {
 
 // CacheAllActionFunc returns a BlobActionFunc that caches all blobs.
 func CacheAllActionFunc() BlobActionFunc {
-	return func(blobID blob.ID) BlobAction {
+	return func(_ blob.ID) BlobAction {
 		return BlobActionCache
 	}
 }
 
 // PassThroughAllActionFunc returns a BlobActionFunc that passes through all blobs without caching.
 func PassThroughAllActionFunc() BlobActionFunc {
-	return func(blobID blob.ID) BlobAction {
+	return func(_ blob.ID) BlobAction {
 		return BlobActionPassThrough
 	}
 }

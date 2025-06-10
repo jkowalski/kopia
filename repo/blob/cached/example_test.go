@@ -2,8 +2,8 @@ package cached_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/kopia/kopia/internal/blobtesting"
@@ -27,27 +27,33 @@ func ExampleNewWrapper() {
 
 	// Example 1: Writes to blobs starting with 'p' and 'q' are silently ignored
 	data1 := gather.FromSlice([]byte("This will be ignored"))
+
 	err := cachedStorage.PutBlob(ctx, "p_ignored_blob", data1, blob.PutOptions{})
 	if err != nil {
-		log.Fatal(err)
+		fmt.Printf("Error writing ignored blob: %v\n", err)
+		return
 	}
 
 	err = cachedStorage.PutBlob(ctx, "q_ignored_blob", data1, blob.PutOptions{})
 	if err != nil {
-		log.Fatal(err)
+		fmt.Printf("Error writing ignored blob: %v\n", err)
+		return
 	}
 
 	// Example 2: Other blobs are cached in memory and written to base storage
 	data2 := gather.FromSlice([]byte("This will be cached"))
+
 	err = cachedStorage.PutBlob(ctx, "cached_blob", data2, blob.PutOptions{})
 	if err != nil {
-		log.Fatal(err)
+		fmt.Printf("Error writing cached blob: %v\n", err)
+		return
 	}
 
 	// Remove the blob from base storage to demonstrate caching
 	err = baseStorage.DeleteBlob(ctx, "cached_blob")
 	if err != nil {
-		log.Fatal(err)
+		fmt.Printf("Error deleting blob from base storage: %v\n", err)
+		return
 	}
 
 	// Reading the blob still works because it's cached in memory
@@ -56,7 +62,8 @@ func ExampleNewWrapper() {
 
 	err = cachedStorage.GetBlob(ctx, "cached_blob", 0, -1, &output)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Printf("Error reading cached blob: %v\n", err)
+		return
 	}
 
 	fmt.Printf("Retrieved from cache: %s\n", string(output.ToByteSlice()))
@@ -64,7 +71,8 @@ func ExampleNewWrapper() {
 	// Example 3: Attempting to read ignored blobs returns not found
 	output.Reset()
 	err = cachedStorage.GetBlob(ctx, "p_ignored_blob", 0, -1, &output)
-	if err == blob.ErrBlobNotFound {
+
+	if errors.Is(err, blob.ErrBlobNotFound) {
 		fmt.Println("Blob starting with 'p' was ignored as expected")
 	}
 

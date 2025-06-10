@@ -156,6 +156,7 @@ func TestCachedStorage_ListBlobs(t *testing.T) {
 
 	// List all blobs
 	var foundBlobs []blob.Metadata
+
 	err = cached.ListBlobs(ctx, "", func(meta blob.Metadata) error {
 		foundBlobs = append(foundBlobs, meta)
 		return nil
@@ -299,6 +300,7 @@ func TestCachedStorage_CustomActionFunc(t *testing.T) {
 		if len(string(blobID))%2 == 0 {
 			return BlobActionCache
 		}
+
 		return BlobActionIgnore
 	}
 

@@ -28,6 +28,7 @@ func Example_recreateOriginalBehavior() {
 				return cached.BlobActionIgnore
 			}
 		}
+
 		return cached.BlobActionCache
 	}
 	cachedStorage2 := cached.NewWrapper(baseStorage, actionFunc2)
@@ -38,6 +39,7 @@ func Example_recreateOriginalBehavior() {
 		if strings.HasPrefix(str, "p") || strings.HasPrefix(str, "q") {
 			return cached.BlobActionIgnore
 		}
+
 		return cached.BlobActionCache
 	}
 	cachedStorage3 := cached.NewWrapper(baseStorage, actionFunc3)
@@ -51,4 +53,33 @@ func Example_recreateOriginalBehavior() {
 	// Created storage 1: Cached: Map
 	// Created storage 2: Cached: Map
 	// Created storage 3: Cached: Map
+}
+
+// OriginalBehaviorActionFunc demonstrates how to recreate the original hardcoded behavior
+// using the new generic API. This ignores blobs starting with 'p' or 'q' and caches all others.
+func OriginalBehaviorActionFunc() cached.BlobActionFunc {
+	return func(blobID blob.ID) cached.BlobAction {
+		str := string(blobID)
+
+		if strings.HasPrefix(str, "p") || strings.HasPrefix(str, "q") {
+			return cached.BlobActionIgnore
+		}
+
+		return cached.BlobActionCache
+	}
+}
+
+// CustomBehaviorActionFunc demonstrates creating a custom action function
+// that handles different blob types differently.
+func CustomBehaviorActionFunc() cached.BlobActionFunc {
+	return func(blobID blob.ID) cached.BlobAction {
+		str := string(blobID)
+
+		// Ignore temporary files
+		if strings.Contains(str, "temp") {
+			return cached.BlobActionIgnore
+		}
+
+		return cached.BlobActionCache
+	}
 }
