@@ -11,6 +11,7 @@ import (
 	"github.com/kopia/kopia/internal/faketime"
 	"github.com/kopia/kopia/internal/gather"
 	"github.com/kopia/kopia/internal/repotesting"
+	"github.com/kopia/kopia/internal/testutil"
 	"github.com/kopia/kopia/repo"
 	"github.com/kopia/kopia/repo/content"
 	"github.com/kopia/kopia/repo/encryption"
@@ -72,29 +73,50 @@ func TestFullMaintenanceRaceConditionBetweenRewriteAndBlobDeletion(t *testing.T)
 		},
 	})
 
-	// Set repository owner for maintenance
+	// Set repository owner for maintenance using the initial connection
 	setMaintenanceOwner(t, ctx, env.RepositoryWriter)
 
-	// Step 1: Create small prefixed contents (metadata) that will be in short packs
+	// Step 1: Create small prefixed contents (metadata) in a separate writer session
+	// This simulates a client connecting and creating snapshots
 	// Prefixed contents go into 'q' packs which are more likely to be short
 	t.Logf("Step 1: Creating prefixed contents at %v", ta.NowFunc()())
 
 	var contentIDs []content.ID
+
+	// Open a separate repository connection for creating content (simulates Client A)
+	createRepo := env.MustConnectOpenAnother(t, func(o *repo.Options) {
+		o.TimeNowFunc = ta.NowFunc()
+	})
+	defer createRepo.Close(ctx)
+
+	_, createWriter, err := createRepo.NewWriter(ctx, repo.WriteSessionOptions{Purpose: "test-create-content"})
+	require.NoError(t, err)
+	defer createWriter.Close(ctx)
+
+	createDirectWriter := testutil.EnsureType[repo.DirectRepositoryWriter](t, createWriter)
+
 	for i := 0; i < 10; i++ {
 		// Create small prefixed contents with different data (uses "m" prefix like manifests)
 		// This ensures they are actually different contents, not deduplicated
 		data := []byte("test metadata content number " + string(rune(i)))
-		cid, err := env.RepositoryWriter.ContentManager().WriteContent(ctx, gather.FromSlice(data), "m", content.NoCompression)
+		cid, err := createDirectWriter.ContentManager().WriteContent(ctx, gather.FromSlice(data), "m", content.NoCompression)
 		require.NoError(t, err)
 		contentIDs = append(contentIDs, cid)
 		t.Logf("Created content %v", cid)
 	}
 
-	require.NoError(t, env.RepositoryWriter.Flush(ctx))
+	require.NoError(t, createDirectWriter.Flush(ctx))
 
-	// Verify contents exist in the index
+	// Verify contents exist in the index using a fresh connection
+	verifyRepo := env.MustConnectOpenAnother(t, func(o *repo.Options) {
+		o.TimeNowFunc = ta.NowFunc()
+	})
+	defer verifyRepo.Close(ctx)
+
+	verifyDirectRepo := testutil.EnsureType[repo.DirectRepository](t, verifyRepo)
+
 	var foundCount int
-	err := env.RepositoryWriter.ContentReader().IterateContents(ctx, content.IterateOptions{
+	err = verifyDirectRepo.ContentReader().IterateContents(ctx, content.IterateOptions{
 		Range:          content.IDRange{},
 		IncludeDeleted: false,
 	}, func(ci content.Info) error {
@@ -109,16 +131,36 @@ func TestFullMaintenanceRaceConditionBetweenRewriteAndBlobDeletion(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, len(contentIDs), foundCount, "expected to find all created contents")
 
-	// Step 2: Delete the contents - this marks them as deleted
+	// Step 2: Delete the contents in a separate writer session - this marks them as deleted
+	// This simulates another client (Client B) deleting manifests
 	t.Logf("Step 2: Deleting contents at %v", ta.NowFunc()())
-	for _, cid := range contentIDs {
-		require.NoError(t, env.RepositoryWriter.ContentManager().DeleteContent(ctx, cid))
-	}
-	require.NoError(t, env.RepositoryWriter.Flush(ctx))
 
-	// Verify contents are marked deleted
+	deleteRepo := env.MustConnectOpenAnother(t, func(o *repo.Options) {
+		o.TimeNowFunc = ta.NowFunc()
+	})
+	defer deleteRepo.Close(ctx)
+
+	_, deleteWriter, err := deleteRepo.NewWriter(ctx, repo.WriteSessionOptions{Purpose: "test-delete-content"})
+	require.NoError(t, err)
+	defer deleteWriter.Close(ctx)
+
+	deleteDirectWriter := testutil.EnsureType[repo.DirectRepositoryWriter](t, deleteWriter)
+
+	for _, cid := range contentIDs {
+		require.NoError(t, deleteDirectWriter.ContentManager().DeleteContent(ctx, cid))
+	}
+	require.NoError(t, deleteDirectWriter.Flush(ctx))
+
+	// Verify contents are marked deleted using a fresh connection
+	verifyDeleteRepo := env.MustConnectOpenAnother(t, func(o *repo.Options) {
+		o.TimeNowFunc = ta.NowFunc()
+	})
+	defer verifyDeleteRepo.Close(ctx)
+
+	verifyDeleteDirectRepo := testutil.EnsureType[repo.DirectRepository](t, verifyDeleteRepo)
+
 	var deletedContentCount int
-	err = env.RepositoryWriter.ContentReader().IterateContents(ctx, content.IterateOptions{
+	err = verifyDeleteDirectRepo.ContentReader().IterateContents(ctx, content.IterateOptions{
 		Range:          content.IDRange{},
 		IncludeDeleted: true,
 	}, func(ci content.Info) error {
@@ -133,20 +175,35 @@ func TestFullMaintenanceRaceConditionBetweenRewriteAndBlobDeletion(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, len(contentIDs), deletedContentCount, "expected all contents to be marked deleted")
 
-	// Step 3: Advance time past RewriteMinAge (2 hours) and run a first snapshot GC
+	// Step 3: Advance time past RewriteMinAge (2 hours) and run first maintenance in a separate connection
+	// This simulates maintenance running on a different client connection
 	// This is needed to set up the timing for drop deleted contents
 	t.Logf("Step 3: Advancing time by 3 hours for first GC at %v", ta.NowFunc()())
 	ta.Advance(3 * time.Hour)
 
-	err = snapshotmaintenance.Run(ctx, env.RepositoryWriter, maintenance.ModeAuto, false, maintenance.SafetyFull)
+	maint1Repo := env.MustConnectOpenAnother(t, func(o *repo.Options) {
+		o.TimeNowFunc = ta.NowFunc()
+	})
+	defer maint1Repo.Close(ctx)
+
+	maint1DirectWriter := testutil.EnsureType[repo.DirectRepositoryWriter](t, maint1Repo)
+
+	err = snapshotmaintenance.Run(ctx, maint1DirectWriter, maintenance.ModeAuto, false, maintenance.SafetyFull)
 	require.NoError(t, err)
 
-	// Step 4: Advance time and run second snapshot GC
+	// Step 4: Advance time and run second maintenance in another separate connection
 	// After two GCs with sufficient spacing, contents can be dropped from index
 	t.Logf("Step 4: Advancing time by 5 hours for second GC at %v", ta.NowFunc()())
 	ta.Advance(5 * time.Hour)
 
-	err = snapshotmaintenance.Run(ctx, env.RepositoryWriter, maintenance.ModeAuto, false, maintenance.SafetyFull)
+	maint2Repo := env.MustConnectOpenAnother(t, func(o *repo.Options) {
+		o.TimeNowFunc = ta.NowFunc()
+	})
+	defer maint2Repo.Close(ctx)
+
+	maint2DirectWriter := testutil.EnsureType[repo.DirectRepositoryWriter](t, maint2Repo)
+
+	err = snapshotmaintenance.Run(ctx, maint2DirectWriter, maintenance.ModeAuto, false, maintenance.SafetyFull)
 	require.NoError(t, err)
 
 	// Step 5: Advance time past BlobDeleteMinAge (24 hours total from start)
@@ -158,11 +215,19 @@ func TestFullMaintenanceRaceConditionBetweenRewriteAndBlobDeletion(t *testing.T)
 	currentTime := ta.NowFunc()()
 	t.Logf("Current time: %v (elapsed from start: %v)", currentTime, currentTime.Sub(startTime))
 
-	// Step 6: Run full maintenance - this should trigger the race condition
+	// Step 6: Run full maintenance in yet another separate connection - this should trigger the race condition
+	// This simulates the typical case where maintenance runs on a dedicated client connection
 	t.Logf("Step 6: Running full maintenance at %v", currentTime)
 
+	maint3Repo := env.MustConnectOpenAnother(t, func(o *repo.Options) {
+		o.TimeNowFunc = ta.NowFunc()
+	})
+	defer maint3Repo.Close(ctx)
+
+	maint3DirectWriter := testutil.EnsureType[repo.DirectRepositoryWriter](t, maint3Repo)
+
 	// Without the workaround, this should fail
-	err = snapshotmaintenance.Run(ctx, env.RepositoryWriter, maintenance.ModeFull, false, maintenance.SafetyFull)
+	err = snapshotmaintenance.Run(ctx, maint3DirectWriter, maintenance.ModeFull, false, maintenance.SafetyFull)
 
 	if os.Getenv("KOPIA_IGNORE_MAINTENANCE_REWRITE_ERROR") != "" {
 		// With the environment variable set, maintenance should succeed
@@ -210,38 +275,83 @@ func TestFullMaintenanceRaceConditionWithWorkaround(t *testing.T) {
 
 	setMaintenanceOwner(t, ctx, env.RepositoryWriter)
 
-	// Create and delete content directly with varied data
+	// Create content in a separate writer session
 	var contentIDs []content.ID
+
+	createRepo := env.MustConnectOpenAnother(t, func(o *repo.Options) {
+		o.TimeNowFunc = ta.NowFunc()
+	})
+	defer createRepo.Close(ctx)
+
+	_, createWriter, err := createRepo.NewWriter(ctx, repo.WriteSessionOptions{Purpose: "test-create-content"})
+	require.NoError(t, err)
+	defer createWriter.Close(ctx)
+
+	createDirectWriter := testutil.EnsureType[repo.DirectRepositoryWriter](t, createWriter)
+
 	for i := 0; i < 10; i++ {
 		data := []byte("test metadata content number " + string(rune(i)))
-		cid, err := env.RepositoryWriter.ContentManager().WriteContent(ctx, gather.FromSlice(data), "m", content.NoCompression)
+		cid, err := createDirectWriter.ContentManager().WriteContent(ctx, gather.FromSlice(data), "m", content.NoCompression)
 		require.NoError(t, err)
 		contentIDs = append(contentIDs, cid)
 	}
 
-	require.NoError(t, env.RepositoryWriter.Flush(ctx))
+	require.NoError(t, createDirectWriter.Flush(ctx))
 
-	// Delete the contents
+	// Delete the contents in a separate writer session
+	deleteRepo := env.MustConnectOpenAnother(t, func(o *repo.Options) {
+		o.TimeNowFunc = ta.NowFunc()
+	})
+	defer deleteRepo.Close(ctx)
+
+	_, deleteWriter, err := deleteRepo.NewWriter(ctx, repo.WriteSessionOptions{Purpose: "test-delete-content"})
+	require.NoError(t, err)
+	defer deleteWriter.Close(ctx)
+
+	deleteDirectWriter := testutil.EnsureType[repo.DirectRepositoryWriter](t, deleteWriter)
+
 	for _, cid := range contentIDs {
-		require.NoError(t, env.RepositoryWriter.ContentManager().DeleteContent(ctx, cid))
+		require.NoError(t, deleteDirectWriter.ContentManager().DeleteContent(ctx, cid))
 	}
-	require.NoError(t, env.RepositoryWriter.Flush(ctx))
+	require.NoError(t, deleteDirectWriter.Flush(ctx))
 
-	// Advance time and run GCs
+	// Advance time and run first maintenance in separate connection
 	ta.Advance(3 * time.Hour)
 
-	err := snapshotmaintenance.Run(ctx, env.RepositoryWriter, maintenance.ModeAuto, false, maintenance.SafetyFull)
+	maint1Repo := env.MustConnectOpenAnother(t, func(o *repo.Options) {
+		o.TimeNowFunc = ta.NowFunc()
+	})
+	defer maint1Repo.Close(ctx)
+
+	maint1DirectWriter := testutil.EnsureType[repo.DirectRepositoryWriter](t, maint1Repo)
+
+	err = snapshotmaintenance.Run(ctx, maint1DirectWriter, maintenance.ModeAuto, false, maintenance.SafetyFull)
 	require.NoError(t, err)
 
+	// Run second maintenance in separate connection
 	ta.Advance(5 * time.Hour)
 
-	err = snapshotmaintenance.Run(ctx, env.RepositoryWriter, maintenance.ModeAuto, false, maintenance.SafetyFull)
+	maint2Repo := env.MustConnectOpenAnother(t, func(o *repo.Options) {
+		o.TimeNowFunc = ta.NowFunc()
+	})
+	defer maint2Repo.Close(ctx)
+
+	maint2DirectWriter := testutil.EnsureType[repo.DirectRepositoryWriter](t, maint2Repo)
+
+	err = snapshotmaintenance.Run(ctx, maint2DirectWriter, maintenance.ModeAuto, false, maintenance.SafetyFull)
 	require.NoError(t, err)
 
 	ta.Advance(20 * time.Hour)
 
-	// With workaround, maintenance should succeed
-	err = snapshotmaintenance.Run(ctx, env.RepositoryWriter, maintenance.ModeFull, false, maintenance.SafetyFull)
+	// Run full maintenance in separate connection - with workaround, should succeed
+	maint3Repo := env.MustConnectOpenAnother(t, func(o *repo.Options) {
+		o.TimeNowFunc = ta.NowFunc()
+	})
+	defer maint3Repo.Close(ctx)
+
+	maint3DirectWriter := testutil.EnsureType[repo.DirectRepositoryWriter](t, maint3Repo)
+
+	err = snapshotmaintenance.Run(ctx, maint3DirectWriter, maintenance.ModeFull, false, maintenance.SafetyFull)
 	require.NoError(t, err, "maintenance should succeed with KOPIA_IGNORE_MAINTENANCE_REWRITE_ERROR workaround")
 
 	t.Logf("SUCCESS: Full maintenance completed successfully with workaround")
