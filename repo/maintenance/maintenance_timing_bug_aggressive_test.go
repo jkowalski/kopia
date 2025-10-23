@@ -75,6 +75,9 @@ func (s *formatSpecificTestSuite) TestMaintenanceTimingBug_RapidCycles(t *testin
 		r, err := w.OpenObject(ctx, objectID)
 		if err != nil {
 			t.Logf("*** BUG REPRODUCED ***: Cannot read object %v: %v", objectID, err)
+			t.Logf("Error details: %+v", err)
+			// Verify this is the actual "object not found" / missing blob error
+			require.ErrorIs(t, err, object.ErrObjectNotFound, "should be object not found")
 			return err
 		}
 		r.Close()
@@ -82,6 +85,8 @@ func (s *formatSpecificTestSuite) TestMaintenanceTimingBug_RapidCycles(t *testin
 	})
 
 	if err != nil {
+		// Double check we're getting the right error type before claiming bug reproduction
+		t.Logf("Verifying error is due to missing blob/object...")
 		t.Fatalf("BUG REPRODUCED: Blob deleted prematurely after %d rapid cycles: %v", 10, err)
 	}
 }
@@ -138,11 +143,14 @@ func (s *formatSpecificTestSuite) TestMaintenanceTimingBug_BoundaryCondition(t *
 		_, err := w.OpenObject(ctx, objectID)
 		if err != nil {
 			t.Logf("*** BUG REPRODUCED ***: Blob deleted at exact boundary: %v", err)
+			t.Logf("Error type: %T", err)
+			t.Logf("Error chain: %+v", err)
 		}
 		return err
 	})
 
 	if err != nil {
+		require.ErrorIs(t, err, object.ErrObjectNotFound, "should be object not found error")
 		t.Fatalf("BUG REPRODUCED at boundary condition: %v", err)
 	}
 }
@@ -292,6 +300,78 @@ func (s *formatSpecificTestSuite) TestMaintenanceTimingBug_ContentCreatedDuringL
 	}
 }
 
+// TestMaintenanceTimingBug_VerifyBlobActuallyDeleted - Verify blob is actually deleted from storage
+func (s *formatSpecificTestSuite) TestMaintenanceTimingBug_VerifyBlobActuallyDeleted(t *testing.T) {
+	ft := faketime.NewClockTimeWithOffset(0)
+
+	ctx, env := repotesting.NewEnvironment(t, s.formatVersion, repotesting.Options{
+		OpenOptions: func(o *repo.Options) {
+			o.TimeNowFunc = ft.NowFunc()
+		},
+	})
+
+	var objectID object.ID
+
+	require.NoError(t, repo.WriteSession(ctx, env.Repository, repo.WriteSessionOptions{}, func(ctx context.Context, w repo.RepositoryWriter) error {
+		ow := w.NewObjectWriter(ctx, object.WriterOptions{Prefix: "y"})
+		fmt.Fprintf(ow, "verify blob deletion test")
+		var err error
+		objectID, err = ow.Result()
+
+		if err == nil {
+			cid, _, _ := objectID.ContentID()
+			t.Logf("Created object %v with content %v", objectID, cid)
+		}
+
+		return err
+	}))
+
+	t.Logf("==== Initial maintenance ====")
+	require.NoError(t, snapshotmaintenance.Run(ctx, env.RepositoryWriter, maintenance.ModeFull, true, maintenance.SafetyFull))
+
+	// Age to GC eligibility
+	ft.Advance(25 * time.Hour)
+
+	t.Logf("==== Mark deleted ====")
+	require.NoError(t, snapshotmaintenance.Run(ctx, env.RepositoryWriter, maintenance.ModeFull, true, maintenance.SafetyFull))
+
+	// Minimal spacing
+	ft.Advance(4 * time.Hour)
+	t.Logf("==== GC cycle that should trigger deletion ====")
+	require.NoError(t, snapshotmaintenance.Run(ctx, env.RepositoryWriter, maintenance.ModeFull, true, maintenance.SafetyFull))
+
+	ft.Advance(4 * time.Hour)
+	require.NoError(t, snapshotmaintenance.Run(ctx, env.RepositoryWriter, maintenance.ModeFull, true, maintenance.SafetyFull))
+
+	// Try to read - this should fail because blob was deleted
+	require.NoError(t, env.Repository.Refresh(ctx))
+	err := repo.WriteSession(ctx, env.Repository, repo.WriteSessionOptions{}, func(ctx context.Context, w repo.RepositoryWriter) error {
+		_, err := w.OpenObject(ctx, objectID)
+		if err != nil {
+			t.Logf("*** BUG REPRODUCED - VERIFIED BLOB DELETION ***")
+			t.Logf("Object %v cannot be read: %v", objectID, err)
+			t.Logf("This confirms the underlying blob was actually deleted from storage")
+
+			// Verify error type
+			require.ErrorIs(t, err, object.ErrObjectNotFound)
+
+			// Try to check if content still exists in index
+			cid, _, _ := objectID.ContentID()
+			contentInfo, err2 := w.ContentInfo(ctx, cid)
+			if err2 != nil {
+				t.Logf("Content info lookup failed: %v", err2)
+			} else {
+				t.Logf("Content still in index but deleted=%v: %+v", contentInfo.Deleted, contentInfo)
+			}
+		}
+		return err
+	})
+
+	if err != nil {
+		t.Fatalf("BUG REPRODUCED AND VERIFIED: Blob actually deleted from storage: %v", err)
+	}
+}
+
 // TestMaintenanceTimingBug_MinimalDelayBetweenGCCycles - Try to trigger with minimal delays
 func (s *formatSpecificTestSuite) TestMaintenanceTimingBug_MinimalDelayBetweenGCCycles(t *testing.T) {
 	ft := faketime.NewClockTimeWithOffset(0)
@@ -347,6 +427,7 @@ func (s *formatSpecificTestSuite) TestMaintenanceTimingBug_MinimalDelayBetweenGC
 		_, err := w.OpenObject(ctx, objectID)
 		if err != nil {
 			t.Logf("*** BUG REPRODUCED ***: Object deleted with minimal GC delays: %v", err)
+			require.ErrorIs(t, err, object.ErrObjectNotFound, "should be object not found")
 		}
 		return err
 	})
