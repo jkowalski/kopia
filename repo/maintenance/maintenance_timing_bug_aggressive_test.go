@@ -2,6 +2,7 @@ package maintenance_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/kopia/kopia/internal/faketime"
 	"github.com/kopia/kopia/internal/repotesting"
 	"github.com/kopia/kopia/repo"
+	"github.com/kopia/kopia/repo/blob"
 	"github.com/kopia/kopia/repo/maintenance"
 	"github.com/kopia/kopia/repo/object"
 	"github.com/kopia/kopia/snapshot/snapshotmaintenance"
@@ -74,10 +76,18 @@ func (s *formatSpecificTestSuite) TestMaintenanceTimingBug_RapidCycles(t *testin
 	err := repo.WriteSession(ctx, slowClient, repo.WriteSessionOptions{}, func(ctx context.Context, w repo.RepositoryWriter) error {
 		r, err := w.OpenObject(ctx, objectID)
 		if err != nil {
-			t.Logf("*** BUG REPRODUCED ***: Cannot read object %v: %v", objectID, err)
+			t.Logf("*** ERROR DETECTED ***: Cannot read object %v: %v", objectID, err)
 			t.Logf("Error details: %+v", err)
-			// Verify this is the actual "object not found" / missing blob error
-			require.ErrorIs(t, err, object.ErrObjectNotFound, "should be object not found")
+			t.Logf("Checking error chain...")
+
+			// Check if this wraps the actual BLOB not found error
+			if errors.Is(err, blob.ErrBlobNotFound) {
+				t.Logf("✅ CONFIRMED: Error chain contains blob.ErrBlobNotFound")
+				t.Logf("*** BUG REPRODUCED ***: BLOB actually deleted from storage")
+			} else if errors.Is(err, object.ErrObjectNotFound) {
+				t.Logf("⚠️  Error is object.ErrObjectNotFound but NOT blob.ErrBlobNotFound")
+				t.Logf("This might be a different issue (index problem, not blob deletion)")
+			}
 			return err
 		}
 		r.Close()
@@ -85,9 +95,11 @@ func (s *formatSpecificTestSuite) TestMaintenanceTimingBug_RapidCycles(t *testin
 	})
 
 	if err != nil {
-		// Double check we're getting the right error type before claiming bug reproduction
-		t.Logf("Verifying error is due to missing blob/object...")
-		t.Fatalf("BUG REPRODUCED: Blob deleted prematurely after %d rapid cycles: %v", 10, err)
+		// CRITICAL: Must be blob.ErrBlobNotFound to match issue #4769
+		if !errors.Is(err, blob.ErrBlobNotFound) {
+			t.Fatalf("WRONG ERROR TYPE: Got %v, but need blob.ErrBlobNotFound to match #4769", err)
+		}
+		t.Fatalf("BUG REPRODUCED: BLOB deleted prematurely after %d rapid cycles: %v", 10, err)
 	}
 }
 
@@ -142,15 +154,21 @@ func (s *formatSpecificTestSuite) TestMaintenanceTimingBug_BoundaryCondition(t *
 	err := repo.WriteSession(ctx, slowClient, repo.WriteSessionOptions{}, func(ctx context.Context, w repo.RepositoryWriter) error {
 		_, err := w.OpenObject(ctx, objectID)
 		if err != nil {
-			t.Logf("*** BUG REPRODUCED ***: Blob deleted at exact boundary: %v", err)
+			t.Logf("*** ERROR DETECTED ***: Blob deleted at exact boundary: %v", err)
 			t.Logf("Error type: %T", err)
-			t.Logf("Error chain: %+v", err)
+
+			// Check for the actual BLOB not found error
+			if errors.Is(err, blob.ErrBlobNotFound) {
+				t.Logf("✅ CONFIRMED: blob.ErrBlobNotFound - BLOB actually deleted")
+			} else {
+				t.Logf("⚠️  Different error type - not blob deletion")
+			}
 		}
 		return err
 	})
 
 	if err != nil {
-		require.ErrorIs(t, err, object.ErrObjectNotFound, "should be object not found error")
+		require.ErrorIs(t, err, blob.ErrBlobNotFound, "MUST be blob.ErrBlobNotFound to match #4769")
 		t.Fatalf("BUG REPRODUCED at boundary condition: %v", err)
 	}
 }
@@ -352,8 +370,12 @@ func (s *formatSpecificTestSuite) TestMaintenanceTimingBug_VerifyBlobActuallyDel
 			t.Logf("Object %v cannot be read: %v", objectID, err)
 			t.Logf("This confirms the underlying blob was actually deleted from storage")
 
-			// Verify error type
-			require.ErrorIs(t, err, object.ErrObjectNotFound)
+			// Verify this is the actual BLOB not found error
+			if errors.Is(err, blob.ErrBlobNotFound) {
+				t.Logf("✅ VERIFIED: blob.ErrBlobNotFound in error chain")
+			} else {
+				t.Logf("⚠️  NOT blob.ErrBlobNotFound - this is a different issue")
+			}
 
 			// Try to check if content still exists in index
 			cid, _, _ := objectID.ContentID()
@@ -363,6 +385,8 @@ func (s *formatSpecificTestSuite) TestMaintenanceTimingBug_VerifyBlobActuallyDel
 			} else {
 				t.Logf("Content still in index but deleted=%v: %+v", contentInfo.Deleted, contentInfo)
 			}
+
+			require.ErrorIs(t, err, blob.ErrBlobNotFound, "MUST be blob.ErrBlobNotFound")
 		}
 		return err
 	})
@@ -426,13 +450,16 @@ func (s *formatSpecificTestSuite) TestMaintenanceTimingBug_MinimalDelayBetweenGC
 	err := repo.WriteSession(ctx, slowClient, repo.WriteSessionOptions{}, func(ctx context.Context, w repo.RepositoryWriter) error {
 		_, err := w.OpenObject(ctx, objectID)
 		if err != nil {
-			t.Logf("*** BUG REPRODUCED ***: Object deleted with minimal GC delays: %v", err)
-			require.ErrorIs(t, err, object.ErrObjectNotFound, "should be object not found")
+			t.Logf("*** ERROR DETECTED ***: Object deleted with minimal GC delays: %v", err)
+			if errors.Is(err, blob.ErrBlobNotFound) {
+				t.Logf("✅ CONFIRMED: blob.ErrBlobNotFound")
+			}
 		}
 		return err
 	})
 
 	if err != nil {
+		require.ErrorIs(t, err, blob.ErrBlobNotFound, "MUST be blob.ErrBlobNotFound")
 		t.Fatalf("BUG REPRODUCED with minimal delays: %v", err)
 	}
 }

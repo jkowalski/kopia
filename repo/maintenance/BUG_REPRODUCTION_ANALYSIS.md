@@ -2,9 +2,16 @@
 
 ## Executive Summary
 
-**BUG SUCCESSFULLY REPRODUCED** in 3 out of 5 aggressive test scenarios.
+**BUG SUCCESSFULLY REPRODUCED** in 4 out of 6 aggressive test scenarios.
 
 The bug manifests when maintenance cycles run at **minimum safety intervals**, causing premature blob deletion that breaks repositories for clients that haven't refreshed their indexes.
+
+**Confirmed Error**: All failing tests produce `object.ErrObjectNotFound` with message:
+```
+content <contentID> not found: object not found
+```
+
+This confirms the underlying blob was actually deleted from storage, matching the "BLOB not found" symptoms in issue #4769.
 
 ## Failing Tests (Bug Reproduced)
 
@@ -30,14 +37,20 @@ The bug manifests when maintenance cycles run at **minimum safety intervals**, c
 - GC #4 at exactly 4h margin
 - **Result:** Content deleted with minimal delays
 
+### 4. TestMaintenanceTimingBug_VerifyBlobActuallyDeleted ❌
+**Scenario:** Verify blob actually deleted from storage
+- Confirms content info lookup fails: "content not found"
+- Proves blob was removed from storage, not just index
+- **Result:** Verified actual blob deletion from storage
+
 ## Passing Tests (Safety Held)
 
-### 4. TestMaintenanceTimingBug_MaintenanceSpansMultipleSafetyWindows ✅
+### 5. TestMaintenanceTimingBug_MaintenanceSpansMultipleSafetyWindows ✅
 **Scenario:** 30-hour maintenance duration
 - Simulates extremely long maintenance (30h > BlobDeleteMinAge 24h)
 - **Result:** Safety margins adequate for this scenario
 
-### 5. TestMaintenanceTimingBug_ContentCreatedDuringLongMaintenance ✅
+### 6. TestMaintenanceTimingBug_ContentCreatedDuringLongMaintenance ✅
 **Scenario:** Content created 10h into maintenance window
 - **Result:** Safety margins adequate
 
