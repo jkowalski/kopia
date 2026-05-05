@@ -38,40 +38,103 @@ func TestRestrictionApplies(t *testing.T) {
 func TestValidateListenAddressIfRestricted(t *testing.T) {
 	t.Parallel()
 
-	require.NoError(t, ValidateListenAddressIfRestricted(
-		false, true, false, "http://0.0.0.0:0",
-	), "when restriction does not apply, bad address is ignored")
+	cases := []struct {
+		name                                      string
+		insecure, withoutPassword, allowDangerous bool
+		address                                   string
+		wantErr                                   bool
+	}{
+		{
+			name: "when_restriction_does_not_apply_bad_address_ignored",
+			// not insecure+without-password: bad address is not validated
+			insecure: false, withoutPassword: true, allowDangerous: false,
+			address: "http://0.0.0.0:0", wantErr: false,
+		},
+		{
+			name:     "escape_hatch_skips_validation",
+			insecure: true, withoutPassword: true, allowDangerous: true,
+			address: "http://0.0.0.0:0", wantErr: false,
+		},
+		{
+			name:     "restricted_non_loopback_rejected",
+			insecure: true, withoutPassword: true, allowDangerous: false,
+			address: "http://0.0.0.0:0", wantErr: true,
+		},
+		{
+			name:     "restricted_loopback_ok",
+			insecure: true, withoutPassword: true, allowDangerous: false,
+			address: "http://127.0.0.1:0", wantErr: false,
+		},
+	}
 
-	require.NoError(t, ValidateListenAddressIfRestricted(
-		true, true, true, "http://0.0.0.0:0",
-	), "escape hatch skips validation")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	err := ValidateListenAddressIfRestricted(true, true, false, "http://0.0.0.0:0")
-	require.Error(t, err)
-	require.ErrorIs(t, err, ErrDisallowedPublicBind)
+			err := ValidateListenAddressIfRestricted(
+				tc.insecure, tc.withoutPassword, tc.allowDangerous, tc.address)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.ErrorIs(t, err, ErrDisallowedPublicBind)
 
-	require.NoError(t, ValidateListenAddressIfRestricted(
-		true, true, false, "http://127.0.0.1:0",
-	))
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestValidateListenerAddrIfRestricted(t *testing.T) {
 	t.Parallel()
 
 	pub := &net.TCPAddr{IP: net.ParseIP("192.0.2.1"), Port: 80}
+	loopback := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1}
 
-	require.NoError(t, ValidateListenerAddrIfRestricted(false, true, false, pub))
+	cases := []struct {
+		name                                      string
+		insecure, withoutPassword, allowDangerous bool
+		addr                                      net.Addr
+		wantErr                                   bool
+	}{
+		{
+			name:     "when_restriction_does_not_apply_public_listener_ignored",
+			insecure: false, withoutPassword: true, allowDangerous: false,
+			addr: pub, wantErr: false,
+		},
+		{
+			name:     "escape_hatch_skips_validation",
+			insecure: true, withoutPassword: true, allowDangerous: true,
+			addr: pub, wantErr: false,
+		},
+		{
+			name:     "restricted_public_listener_rejected",
+			insecure: true, withoutPassword: true, allowDangerous: false,
+			addr: pub, wantErr: true,
+		},
+		{
+			name:     "restricted_loopback_ok",
+			insecure: true, withoutPassword: true, allowDangerous: false,
+			addr: loopback, wantErr: false,
+		},
+	}
 
-	require.NoError(t, ValidateListenerAddrIfRestricted(true, true, true, pub))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	err := ValidateListenerAddrIfRestricted(true, true, false, pub)
-	require.Error(t, err)
-	require.ErrorIs(t, err, ErrDisallowedPublicBind)
+			err := ValidateListenerAddrIfRestricted(
+				tc.insecure, tc.withoutPassword, tc.allowDangerous, tc.addr)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.ErrorIs(t, err, ErrDisallowedPublicBind)
 
-	require.NoError(t, ValidateListenerAddrIfRestricted(
-		true, true, false,
-		&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1},
-	))
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestParseListenHost(t *testing.T) {
@@ -120,6 +183,7 @@ func TestValidateListenAddressFlag(t *testing.T) {
 	ok := []string{
 		"http://127.0.0.1:51515",
 		"http://localhost:0",
+		"http://LoCaLhOsT:51515",
 		"http://LOCALHOST:9999",
 		"http://[::1]:123",
 		"http://127.0.0.2:1",
@@ -207,4 +271,10 @@ func TestValidateListenerAddr_unknownType(t *testing.T) {
 	err := ValidateListenerAddr(stubAddr{network: "tcp", s: "192.0.2.1:80"})
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrDisallowedPublicBind)
+}
+
+func TestValidateListenerAddr_stubUnixNetwork(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, ValidateListenerAddr(stubAddr{network: "unix", s: "/tmp/kopia.sock"}))
 }

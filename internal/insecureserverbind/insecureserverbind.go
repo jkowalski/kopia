@@ -47,7 +47,13 @@ func stripProtocol(addr string) string {
 }
 
 // ParseListenHost extracts the host part of a server listen address flag value.
-// If isUnix is true, host is empty and the address refers to a unix domain socket.
+// If isUnix is true, host is empty and the address refers to a Unix domain socket.
+//
+// Unix detection runs after stripping a leading http:// or https:// (same as the server’s
+// stripProtocol). Any form that becomes unix:… is treated as a Unix socket, including:
+//   - unix:/path/to/socket
+//   - http://unix:/path/to/socket
+//   - https://unix:/path/to/socket
 func ParseListenHost(address string) (host string, isUnix bool, err error) {
 	stripped := stripProtocol(address)
 	if strings.HasPrefix(stripped, "unix:") {
