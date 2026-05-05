@@ -14,7 +14,7 @@ const AllowDangerousUnauthenticatedNetworkFlag = "allow-extremely-dangerous-unau
 
 // AllowDangerousUnauthenticatedNetworkFlagHelp is the kingpin description for that flag.
 const AllowDangerousUnauthenticatedNetworkFlagHelp = "Allow unauthenticated server to listen on non-loopback addresses; " +
-	"exposes full repository and control API to the network without authentication (extremely dangerous)"
+	"exposes full repository and control API to the network without authentication which allows any external attacker to take full control of the server host (extremely dangerous)"
 
 // ErrDisallowedPublicBind is returned when the address would expose an unauthenticated server beyond loopback.
 var ErrDisallowedPublicBind = errors.New("refusing to expose unauthenticated server on non-loopback network bind")
