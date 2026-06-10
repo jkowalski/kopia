@@ -199,13 +199,28 @@ func (h *issue4769Harness) clientResumesAndCommits(t *testing.T, ctx context.Con
 		"the client's snapshot commit succeeded - kopia reported a successful backup")
 }
 
-// verifyRepositoryIsBroken reproduces the exact user-visible failure from issue #4769:
-// a fresh repository handle can no longer list snapshots because the committed index
-// references a pack blob that maintenance deleted.
-func (h *issue4769Harness) verifyRepositoryIsBroken(t *testing.T, ctx context.Context) {
+// runFullMaintenance runs a complete FULL maintenance cycle with SafetyFull, exactly like
+// "kopia maintenance run --full" does (snapshotmaintenance.Run wraps the same calls).
+func (h *issue4769Harness) runFullMaintenance(t *testing.T, ctx context.Context) {
 	t.Helper()
 
-	verifyBlobNotFound(t, h.env.RootStorage(), h.packBlobID)
+	err := maintenance.RunExclusive(ctx, h.env.RepositoryWriter, maintenance.ModeFull, true,
+		func(ctx context.Context, runParams maintenance.RunParameters) error {
+			return maintenance.Run(ctx, runParams, maintenance.SafetyFull)
+		})
+	require.NoError(t, err)
+}
+
+// verifySnapshotsStillReadable asserts the CORRECT post-conditions: the committed snapshot
+// can be listed by a fresh repository handle and its metadata pack blob still exists.
+//
+// While the bug exists, this FAILS with the exact user-visible error from issue #4769:
+//
+//	unable to find manifest entries: unable to load manifest contents:
+//	error getting cached content from blob "q...-s...":
+//	failed to get blob with ID q...-s...: BLOB not found
+func (h *issue4769Harness) verifySnapshotsStillReadable(t *testing.T, ctx context.Context) {
+	t.Helper()
 
 	freshRep, err := repo.Open(ctx, h.env.ConfigFile(), h.env.Password, &repo.Options{
 		TimeNowFunc: h.ta.NowFunc(),
@@ -214,13 +229,12 @@ func (h *issue4769Harness) verifyRepositoryIsBroken(t *testing.T, ctx context.Co
 
 	defer freshRep.Close(ctx)
 
-	_, err = snapshot.ListSnapshots(ctx, freshRep, h.source)
-	require.Error(t, err, "expected snapshot listing to fail - repository is broken")
-	require.ErrorContains(t, err, "unable to load manifest contents")
-	require.ErrorContains(t, err, string(h.packBlobID))
-	require.ErrorContains(t, err, "BLOB not found")
+	snaps, err := snapshot.ListSnapshots(ctx, freshRep, h.source)
+	require.NoError(t, err,
+		"repository is broken: the committed index references pack blob %v which was deleted by maintenance (issue #4769)", h.packBlobID)
+	require.Len(t, snaps, 1)
 
-	t.Logf("reproduced issue #4769: %v", err)
+	verifyBlobExists(t, h.env.RootStorage(), h.packBlobID)
 }
 
 // TestPackGCDeletesPacksOfSessionCommittedDuringMaintenance reproduces hypothesis #1:
@@ -236,11 +250,18 @@ func TestPackGCDeletesPacksOfSessionCommittedDuringMaintenance(t *testing.T) {
 	// before the index flush.
 	h.clientWritesPacksThenStallsBeforeIndexFlush(t, ctx)
 
-	// the client stays stalled slightly longer than PackDeleteMinAge.
-	h.ta.Advance(maintenance.SafetyFull.PackDeleteMinAge + time.Hour)
+	// an ordinary scheduled FULL maintenance runs 12h later. On this first cycle the
+	// content-rewrite task runs and blob deletion is deferred (MinRewriteToOrphanDeletionDelay),
+	// like on any warmed-up production repository with daily full maintenance.
+	h.ta.Advance(12 * time.Hour)
+	h.runFullMaintenance(t, ctx)
 
-	// M0: scheduled FULL maintenance starts on the owner machine. RunExclusive freezes
-	// the index view (DisableIndexRefresh + Refresh) before running any task.
+	// the client stays stalled until slightly past PackDeleteMinAge (24h).
+	h.ta.Advance(maintenance.SafetyFull.PackDeleteMinAge - 11*time.Hour)
+
+	// M0: the next scheduled FULL maintenance starts on the owner machine; this cycle is
+	// due for blob deletion. RunExclusive freezes the index view (DisableIndexRefresh +
+	// Refresh) before running any task.
 	err := maintenance.RunExclusive(ctx, h.env.RepositoryWriter, maintenance.ModeFull, true,
 		func(ctx context.Context, runParams maintenance.RunParameters) error {
 			// This callback is exactly where snapshotmaintenance.Run executes snapshot GC,
@@ -264,8 +285,9 @@ func TestPackGCDeletesPacksOfSessionCommittedDuringMaintenance(t *testing.T) {
 		})
 	require.NoError(t, err, "maintenance itself reports success")
 
-	// the committed snapshot's metadata pack is gone => BLOB not found, repo broken.
-	h.verifyRepositoryIsBroken(t, ctx)
+	// correct behavior: the committed snapshot must remain readable. While the bug
+	// exists this fails with the exact "BLOB not found" symptom from issue #4769.
+	h.verifySnapshotsStillReadable(t, ctx)
 }
 
 // TestPackGCDeletesPacksOfLongRunningSession reproduces hypothesis #2: a client suspended
@@ -279,27 +301,25 @@ func TestPackGCDeletesPacksOfLongRunningSession(t *testing.T) {
 	// T0: client writes its q pack + session marker, then the machine is suspended.
 	h.clientWritesPacksThenStallsBeforeIndexFlush(t, ctx)
 
-	// the machine stays asleep for >96h (e.g. laptop closed over a long weekend + holidays).
-	h.ta.Advance(maintenance.SafetyFull.SessionExpirationAge + 4*time.Hour)
-
-	// an ordinary scheduled FULL maintenance run happens elsewhere while the client sleeps.
-	// The session marker still exists, but its CheckpointTime (== session start, never
-	// refreshed) is older than SessionExpirationAge, so pack-gc deletes both the pack and
+	// the machine stays asleep for >96h (e.g. laptop closed over a long weekend + holidays)
+	// while ordinary scheduled FULL maintenance runs happen elsewhere. The session marker
+	// still exists, but its CheckpointTime (== session start, never refreshed) becomes
+	// older than SessionExpirationAge, so the pack-gc cycle deletes both the pack blob and
 	// the marker of the still-live session.
-	err := maintenance.RunExclusive(ctx, h.env.RepositoryWriter, maintenance.ModeFull, true,
-		func(ctx context.Context, runParams maintenance.RunParameters) error {
-			return maintenance.Run(ctx, runParams, maintenance.SafetyFull)
-		})
-	require.NoError(t, err)
+	h.ta.Advance(maintenance.SafetyFull.SessionExpirationAge + 2*time.Hour)
+	h.runFullMaintenance(t, ctx) // first cycle: content rewrite, blob deletion deferred
 
-	verifyBlobNotFound(t, h.env.RootStorage(), h.packBlobID)
+	h.ta.Advance(2 * time.Hour)
+	h.runFullMaintenance(t, ctx) // second cycle: blob deletion is due and runs
 
-	// the client resumes and commits; the index flush succeeds (only one maintenance run
-	// happened, so the write epoch did not advance twice and ErrVerySlowIndexWrite does not
-	// trigger) and kopia reports a successful snapshot referencing a deleted blob.
+	// the client resumes and commits; the index flush succeeds (epochs did not advance
+	// twice during the stall, so the epoch manager's ErrVerySlowIndexWrite safety does not
+	// trigger) and kopia reports a successful snapshot referencing the deleted blob.
 	h.clientResumesAndCommits(t, ctx)
 
-	h.verifyRepositoryIsBroken(t, ctx)
+	// correct behavior: the committed snapshot must remain readable. While the bug
+	// exists this fails with the exact "BLOB not found" symptom from issue #4769.
+	h.verifySnapshotsStillReadable(t, ctx)
 }
 
 func listBlobIDs(t *testing.T, ctx context.Context, st blob.Storage, prefix blob.ID) []blob.ID {
