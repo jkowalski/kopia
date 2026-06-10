@@ -33,11 +33,14 @@
 // younger than SessionExpirationAge (96h).
 //
 // Required timing:
-//   - a client writes a pack blob at T0 and does not complete any index flush for >24h
-//     (PackDeleteMinAge) - e.g. the machine is suspended mid-upload, the process is
-//     SIGSTOPped/cgroup-frozen, the VM is live-migrated/paused, or storage is so slow
-//     that no checkpoint completes (the 45-minute checkpoint timer does not run while
-//     the process is suspended);
+//   - a client writes a pack blob at T0 and does not complete any SUCCESSFUL index flush
+//     for >24h (PackDeleteMinAge). This does NOT require a stuck process: it also happens
+//     when the writer host cannot write index blobs to storage for >24h (expired/rotated
+//     credentials, broken egress proxy, severe throttling, partial storage outage) while
+//     the process keeps running and retrying - see
+//     TestPackGCDeletesPacksOfClientWithIndexWriteOutage. Suspend/SIGSTOP/cgroup-freeze/
+//     VM-pause of the client produces the same state (the 45-minute checkpoint timer does
+//     not run while a process is suspended);
 //   - a FULL maintenance run starts at M0 >= T0+24h, while the client's flush has not
 //     landed yet;
 //   - the client wakes up and successfully completes its flush while the earlier, slow
@@ -77,13 +80,19 @@ package maintenance_test
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/kopia/kopia/internal/epoch"
 	"github.com/kopia/kopia/internal/faketime"
 	"github.com/kopia/kopia/internal/repotesting"
+	"github.com/kopia/kopia/internal/testutil"
 	"github.com/kopia/kopia/repo"
 	"github.com/kopia/kopia/repo/blob"
 	"github.com/kopia/kopia/repo/content"
@@ -91,6 +100,29 @@ import (
 	"github.com/kopia/kopia/repo/maintenance"
 	"github.com/kopia/kopia/snapshot"
 )
+
+// errSimulatedIndexWriteOutage simulates a storage-side write failure (expired credentials,
+// throttling, partial outage, broken egress/proxy) affecting only the writer host.
+var errSimulatedIndexWriteOutage = errors.New("simulated storage outage: PutObject access denied")
+
+// indexWriteOutageStorage wraps blob.Storage and, while the outage flag is set, fails writes
+// of index blobs (prefix "x"). This models the state that always exists at outage onset in a
+// real deployment: pack blobs are uploaded continuously during a snapshot and index blobs are
+// only written at flush/checkpoint boundaries (up to 45min later), so when storage writes
+// start failing, some pack blobs have already landed while their index entries have not.
+type indexWriteOutageStorage struct {
+	blob.Storage
+
+	indexWritesFailing atomic.Bool
+}
+
+func (s *indexWriteOutageStorage) PutBlob(ctx context.Context, id blob.ID, data blob.Bytes, opts blob.PutOptions) error {
+	if s.indexWritesFailing.Load() && strings.HasPrefix(string(id), epoch.EpochManagerIndexUberPrefix) {
+		return errSimulatedIndexWriteOutage
+	}
+
+	return s.Storage.PutBlob(ctx, id, data, opts) //nolint:wrapcheck
+}
 
 // issue4769Harness bundles the two repository handles ("client" machine and
 // "maintenance owner" machine) that share one underlying storage and one fake clock.
@@ -100,6 +132,10 @@ type issue4769Harness struct {
 
 	// client is a second, independent repository handle simulating another machine.
 	client repo.DirectRepositoryWriter
+
+	// clientStorage is the client's view of the shared storage; it can simulate an
+	// outage of index-blob writes affecting only the client host.
+	clientStorage *indexWriteOutageStorage
 
 	// source of the snapshot written by the client.
 	source snapshot.SourceInfo
@@ -133,8 +169,15 @@ func setupIssue4769Harness(t *testing.T) (context.Context, *issue4769Harness) {
 	// sanity: this format version uses the epoch manager, like the repository in #4769.
 	verifyEpochManagerIsEnabled(t, ctx, env.Repository)
 
-	// open an independent "client" handle against the same storage.
-	clientRep, err := repo.Open(ctx, env.ConfigFile(), env.Password, &repo.Options{
+	// open an independent "client" handle against the same underlying storage, routed
+	// through a wrapper that can simulate index-write failures on the client host only.
+	h.clientStorage = &indexWriteOutageStorage{Storage: env.RootStorage()}
+
+	clientConfigFile := filepath.Join(testutil.TempDirectory(t), "client.config")
+	err := repo.Connect(ctx, clientConfigFile, repotesting.NewReconnectableStorage(t, h.clientStorage), env.Password, &repo.ConnectOptions{})
+	require.NoError(t, err)
+
+	clientRep, err := repo.Open(ctx, clientConfigFile, env.Password, &repo.Options{
 		TimeNowFunc: h.ta.NowFunc(),
 	})
 	require.NoError(t, err)
@@ -316,6 +359,88 @@ func TestPackGCDeletesPacksOfLongRunningSession(t *testing.T) {
 	// twice during the stall, so the epoch manager's ErrVerySlowIndexWrite safety does not
 	// trigger) and kopia reports a successful snapshot referencing the deleted blob.
 	h.clientResumesAndCommits(t, ctx)
+
+	// correct behavior: the committed snapshot must remain readable. While the bug
+	// exists this fails with the exact "BLOB not found" symptom from issue #4769.
+	h.verifySnapshotsStillReadable(t, ctx)
+}
+
+// TestPackGCDeletesPacksOfClientWithIndexWriteOutage reproduces hypothesis #1 WITHOUT any
+// suspended/paused client. The client process runs (and keeps retrying) the entire time;
+// what fails is its ability to WRITE INDEX BLOBS to storage for >24h - e.g. expired/rotated
+// credentials on the writer host, a broken egress proxy, severe throttling, or a partial
+// storage outage that does not affect the (separate) maintenance host.
+//
+// Pack blobs are uploaded continuously during snapshots while index blobs are written only
+// at flush/checkpoint boundaries (up to 45min later, 10min when actively writing), so the
+// onset of such an outage always catches some pack blobs that are already durable but not
+// yet referenced by any index. Failed flushes keep those entries pending in the long-lived
+// writer (kopia server / KopiaUI background process) and every retry re-attempts the same
+// index write. When storage access recovers, the flush finally succeeds - and if that
+// happens while a (slow, hours-long at #4769's scale) full maintenance run is in progress,
+// pack-gc deletes the now->24h-old packs using its pre-recovery frozen index view and its
+// post-recovery session listing.
+//
+// Required timing: >24h of failing index writes from the writer host, recovery landing
+// inside a full-maintenance window. No process is ever paused.
+func TestPackGCDeletesPacksOfClientWithIndexWriteOutage(t *testing.T) {
+	ctx, h := setupIssue4769Harness(t)
+
+	qBlobsBefore := listBlobIDs(t, ctx, h.env.RootStorage(), content.PackBlobIDPrefixSpecial)
+
+	// T0: the client host loses the ability to write index blobs right as a snapshot
+	// completes: the manifest content and its q pack blob upload fine, the index write
+	// fails, so the snapshot attempt errors out. The long-lived writer keeps the index
+	// entries pending and the session open, exactly like a kopia server would.
+	h.clientStorage.indexWritesFailing.Store(true)
+
+	_, err := snapshot.SaveSnapshot(ctx, h.client, &snapshot.Manifest{
+		Source:      h.source,
+		Description: "snapshot whose metadata pack will be deleted by maintenance",
+	})
+	require.NoError(t, err)
+
+	err = h.client.Flush(ctx)
+	require.ErrorIs(t, err, errSimulatedIndexWriteOutage, "expected the snapshot flush to fail during the outage")
+
+	qBlobsAfter := listBlobIDs(t, ctx, h.env.RootStorage(), content.PackBlobIDPrefixSpecial)
+	newQBlobs := setDiff(qBlobsAfter, qBlobsBefore)
+	require.Len(t, newQBlobs, 1, "expected the failed flush to have written exactly one q pack blob")
+	h.packBlobID = newQBlobs[0]
+	require.NotEmpty(t, content.SessionIDFromBlobID(h.packBlobID))
+
+	// an ordinary scheduled FULL maintenance runs on the (unaffected) owner machine;
+	// on this first cycle blob deletion is deferred.
+	h.ta.Advance(time.Hour)
+	h.runFullMaintenance(t, ctx)
+
+	// the outage persists; the client keeps retrying and keeps failing - the process is
+	// alive and active the whole time, no suspend involved.
+	for range 3 {
+		h.ta.Advance(8 * time.Hour)
+		require.ErrorIs(t, h.client.Flush(ctx), errSimulatedIndexWriteOutage)
+	}
+
+	// M0 = T0+25h: the next scheduled FULL maintenance starts and freezes its index view,
+	// which does not contain the client's still-uncommitted entries.
+	err = maintenance.RunExclusive(ctx, h.env.RepositoryWriter, maintenance.ModeFull, true,
+		func(ctx context.Context, runParams maintenance.RunParameters) error {
+			// 20 minutes into the maintenance run (snapshot GC / rewrite phase at scale),
+			// storage access recovers on the client host...
+			h.ta.Advance(20 * time.Minute)
+			h.clientStorage.indexWritesFailing.Store(false)
+
+			// ...and the client's next retry succeeds: index blobs are committed, the
+			// session marker is deleted, kopia reports a successful backup.
+			require.NoError(t, h.client.Flush(ctx),
+				"the client's snapshot commit succeeded once the outage ended")
+
+			// the q pack is now ~25h old; the session is also ~25h old - well within
+			// SessionExpirationAge (96h) - yet pack-gc will delete the pack because its
+			// index view predates the commit while its session listing postdates it.
+			return maintenance.Run(ctx, runParams, maintenance.SafetyFull)
+		})
+	require.NoError(t, err, "maintenance itself reports success")
 
 	// correct behavior: the committed snapshot must remain readable. While the bug
 	// exists this fails with the exact "BLOB not found" symptom from issue #4769.
